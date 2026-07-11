@@ -1,7 +1,7 @@
 import sys
 import socket
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLineEdit, QLabel, QCheckBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLineEdit, QLabel, QCheckBox, QComboBox
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 import pyqtgraph as pg
 
@@ -114,20 +114,29 @@ class SonarViewer(QMainWindow):
         self.autorange_btn.clicked.connect(self.toggle_autorange)
 
         self.status_label = QLabel("Status: Disconnected")
-        self.stats_label = QLabel("Min: 0 | Max: 0 | Avg: 0")
+
+        self.pulse_type_combo = QComboBox()
+        self.pulse_type_combo.addItems(["Single", "Barker13"])
+        self.pulse_type_combo.currentIndexChanged.connect(self.change_pulse_type)
+
+        self.reset_zoom_btn = QPushButton("Reset Zoom")
+        self.reset_zoom_btn.clicked.connect(self.reset_zoom)
 
         ctrl_layout.addWidget(QLabel("ESP32 IP:"))
         ctrl_layout.addWidget(self.ip_input)
         ctrl_layout.addWidget(self.start_btn)
         ctrl_layout.addWidget(self.single_btn)
         ctrl_layout.addWidget(self.autorange_btn)
+        ctrl_layout.addWidget(self.reset_zoom_btn)
+        ctrl_layout.addWidget(QLabel("Pulse Type:"))
+        ctrl_layout.addWidget(self.pulse_type_combo)
         ctrl_layout.addStretch()
-        ctrl_layout.addWidget(self.stats_label)
         ctrl_layout.addWidget(self.status_label)
         layout.addLayout(ctrl_layout)
 
         # Đồ thị
         self.plot_widget = pg.PlotWidget(title="Received Signal (2048 samples)")
+        self.plot_widget.getViewBox().setMouseMode(pg.ViewBox.RectMode) # Kích hoạt chế độ quét chọn vùng để zoom
         self.plot_widget.setYRange(0, 3.3) # Đổi sang thang đo Volt (0-3.3V)
         self.plot_widget.setXRange(0, 2048)
         self.plot_widget.setLabel('left', 'Voltage', units='V')
@@ -138,6 +147,22 @@ class SonarViewer(QMainWindow):
 
         self.receiver = None
         self.is_single_shot = False
+
+    def reset_zoom(self):
+        self.plot_widget.setYRange(0, 3.3)
+        self.plot_widget.setXRange(0, 2048)
+
+    def change_pulse_type(self):
+        pulse_type = self.pulse_type_combo.currentText().lower() # "single" or "barker13"
+        host = self.ip_input.text()
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            message = f"cfg:{pulse_type}".encode('utf-8')
+            sock.sendto(message, (host, 8080))
+            sock.close()
+            self.status_label.setText(f"Config sent: {pulse_type}")
+        except Exception as e:
+            self.status_label.setText(f"Send config error: {e}")
 
     def toggle_autorange(self):
         if self.autorange_btn.isChecked():
@@ -183,15 +208,6 @@ class SonarViewer(QMainWindow):
 
         # Cập nhật đồ thị (hiển thị trực tiếp dữ liệu thô nhận được từ ESP32)
         self.curve.setData(samples)
-        
-        # Tính toán thông số hiển thị
-        s_min = np.min(samples)
-        s_max = np.max(samples)
-        s_avg = np.mean(samples)
-        self.stats_label.setText(
-            f"Min: {s_min:.2f}V | Max: {s_max:.2f}V | Avg: {s_avg:.2f}V | "
-            f"Peak@{peak_idx} (Δ{peak_val:.3f}V)"
-        )
 
         # Nếu là Single Shot, dừng sau 1 lần nhận dữ liệu
         if self.is_single_shot:
