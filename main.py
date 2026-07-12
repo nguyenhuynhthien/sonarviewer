@@ -63,10 +63,17 @@ class RadarWidget(QWidget):
         self.history = {}  # Maps angle (int) -> numpy array of normalized intensities
         self.max_samples = 2048
         self.downsample_factor = 16  # 2048 / 16 = 128 bins
+        self.targets = []  # List of (range, angle, strength)
+
+    def add_target(self, range_val, angle, strength):
+        self.targets.append((range_val, angle, strength))
 
     def set_data(self, angle, samples):
         if angle != self.current_angle:
-            self.sweep_direction = 1 if angle > self.current_angle else -1
+            new_dir = 1 if angle > self.current_angle else -1
+            if new_dir != self.sweep_direction:
+                self.targets = []  # Clear targets on new scan sweep direction change
+            self.sweep_direction = new_dir
         self.current_angle = angle
 
         # Calculate intensities: absolute deviation from median (baseline)
@@ -91,7 +98,10 @@ class RadarWidget(QWidget):
 
     def set_angle(self, angle):
         if angle != self.current_angle:
-            self.sweep_direction = 1 if angle > self.current_angle else -1
+            new_dir = 1 if angle > self.current_angle else -1
+            if new_dir != self.sweep_direction:
+                self.targets = []
+            self.sweep_direction = new_dir
         self.current_angle = angle
 
         # Decay older sweeps slowly even when idle
@@ -243,8 +253,33 @@ class RadarWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(center_x - 6, center_y - 6, 12, 12)
 
+        # 4. Draw detected targets
+        max_range = (2048 * 343.0) / (2.0 * 160000.0)  # ~2.1952 meters
+        for r_val, a_val, s_val in self.targets:
+            rad = np.radians(a_val)
+            target_r = max_radius * (r_val / max_range)
+            if target_r > max_radius:
+                target_r = max_radius
+            
+            tx = center_x + target_r * np.cos(rad)
+            ty = center_y - target_r * np.sin(rad)
+            
+            # Draw target as red circle
+            painter.setPen(QPen(QColor(255, 38, 38, 255), 2))
+            painter.setBrush(QColor(255, 69, 58, 200))
+            painter.drawEllipse(QPointF(tx, ty), 6, 6)
+            
+            # Draw range text next to it
+            font = painter.font()
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(255, 69, 58, 220)))
+            painter.drawText(int(tx) + 8, int(ty) + 4, f"{r_val:.2f}m")
+
 class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int)
+    target_received = pyqtSignal(float, int, float)
     status_changed = pyqtSignal(str)
 
     def __init__(self, host='esp32.local', port=8080):
@@ -308,6 +343,17 @@ class DataReceiver(QThread):
                     except ValueError:
                         pass
 
+                elif data.startswith(b"target:"):
+                    try:
+                        parts = data[7:].decode('utf-8').split(',')
+                        if len(parts) == 3:
+                            t_range = float(parts[0])
+                            t_angle = int(parts[1])
+                            t_strength = float(parts[2])
+                            self.target_received.emit(t_range, t_angle, t_strength)
+                    except ValueError:
+                        pass
+
         except Exception as e:
             self.status_changed.emit(f"Error: {e}")
         finally:
@@ -362,11 +408,16 @@ class SonarViewer(QMainWindow):
         self.curve = self.plot_widget.plot(pen=pg.mkPen('y', width=1.5))
         top_layout.addWidget(self.plot_widget, stretch=1)
 
-        # 2. Thanh điều khiển phía dưới (chiếm 1/4 chiều cao)
+        # 2. Thanh điều khiển phía dưới (chia làm 2 dòng để vừa với màn hình MacBook)
         ctrl_widget = QWidget()
-        ctrl_layout = QHBoxLayout(ctrl_widget)
-        ctrl_layout.setContentsMargins(10, 0, 10, 0)
-        ctrl_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        ctrl_layout = QVBoxLayout(ctrl_widget)
+        ctrl_layout.setContentsMargins(10, 5, 10, 5)
+        ctrl_layout.setSpacing(6)
+
+        row1_layout = QHBoxLayout()
+        row1_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        row2_layout = QHBoxLayout()
+        row2_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.ip_input = QLineEdit("esp32.local")
         self.ip_input.setFixedWidth(120)
@@ -387,28 +438,40 @@ class SonarViewer(QMainWindow):
         self.pulse_type_combo.addItems(["Single", "Barker13"])
         self.pulse_type_combo.currentIndexChanged.connect(self.change_pulse_type)
 
+        self.signal_type_combo = QComboBox()
+        self.signal_type_combo.addItems(["Raw Signal", "Demodulated", "Pulse Compressed"])
+        self.signal_type_combo.currentIndexChanged.connect(self.change_signal_type)
+
         self.reset_zoom_btn = QPushButton("Reset Zoom")
         self.reset_zoom_btn.clicked.connect(self.reset_zoom)
 
         self.servo_switch = ToggleSwitch()
         self.servo_switch.clicked.connect(self.toggle_servo)
 
-        ctrl_layout.addWidget(QLabel("ESP32 IP:"))
-        ctrl_layout.addWidget(self.ip_input)
-        ctrl_layout.addWidget(self.start_btn)
-        ctrl_layout.addWidget(self.single_btn)
-        ctrl_layout.addWidget(self.autorange_btn)
-        ctrl_layout.addWidget(self.reset_zoom_btn)
-        ctrl_layout.addWidget(QLabel("Run Servo:"))
-        ctrl_layout.addWidget(self.servo_switch)
+        # Dòng 1: Cấu hình kết nối và điều khiển
+        row1_layout.addWidget(QLabel("ESP32 IP:"))
+        row1_layout.addWidget(self.ip_input)
+        row1_layout.addWidget(self.start_btn)
+        row1_layout.addWidget(self.single_btn)
+        row1_layout.addWidget(self.autorange_btn)
+        row1_layout.addWidget(self.reset_zoom_btn)
+        row1_layout.addWidget(QLabel("Run Servo:"))
+        row1_layout.addWidget(self.servo_switch)
+        
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: #8E8E93; font-style: italic; margin-right: 15px;")
 
-        ctrl_layout.addWidget(QLabel("Pulse Type:"))
-        ctrl_layout.addWidget(self.pulse_type_combo)
-        ctrl_layout.addStretch()
-        ctrl_layout.addWidget(self.info_label)
-        ctrl_layout.addWidget(self.status_label)
+        # Dòng 2: Cấu hình tín hiệu và trạng thái hiển thị
+        row2_layout.addWidget(QLabel("Pulse Type:"))
+        row2_layout.addWidget(self.pulse_type_combo)
+        row2_layout.addWidget(QLabel("Signal Stream:"))
+        row2_layout.addWidget(self.signal_type_combo)
+        row2_layout.addStretch()
+        row2_layout.addWidget(self.info_label)
+        row2_layout.addWidget(self.status_label)
+
+        ctrl_layout.addLayout(row1_layout)
+        ctrl_layout.addLayout(row2_layout)
         
         main_layout.addWidget(ctrl_widget, stretch=1)
 
@@ -438,6 +501,7 @@ class SonarViewer(QMainWindow):
                 self.receiver.wait()
             self.receiver = DataReceiver(host=host)
             self.receiver.data_received.connect(self.update_plot)
+            self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self.update_status)
             self.receiver.start()
         return self.receiver
@@ -450,6 +514,21 @@ class SonarViewer(QMainWindow):
         pulse_type = self.pulse_type_combo.currentText().lower()
         self.get_receiver().send_command(f"cfg:{pulse_type}")
         self.info_label.setText(f"Config sent: {pulse_type}")
+
+    def change_signal_type(self):
+        idx = self.signal_type_combo.currentIndex()
+        if idx == 0:
+            mode = "raw"
+        elif idx == 1:
+            mode = "demod"
+        else:
+            mode = "compressed"
+        self.get_receiver().send_command(f"mode:{mode}")
+        self.info_label.setText(f"Mode command sent: mode:{mode}")
+
+    def update_target(self, range_val, angle, strength):
+        self.radar_widget.add_target(range_val, angle, strength)
+        self.info_label.setText(f"Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f}")
 
     def toggle_servo(self, checked=None):
         state = self.servo_switch.isChecked()
