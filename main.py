@@ -3,7 +3,7 @@ import socket
 import numpy as np
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLineEdit, QLabel, QCheckBox, QComboBox, QAbstractButton
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QPropertyAnimation, pyqtProperty, QPointF
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QPropertyAnimation, pyqtProperty, QPointF, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPolygonF
 import pyqtgraph as pg
 
@@ -64,17 +64,101 @@ class RadarWidget(QWidget):
         self.max_samples = 2048
         self.downsample_factor = 16  # 2048 / 16 = 128 bins
         self.targets = []  # List of (range, angle, strength)
+        self.zoom_factor = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.drag_start = None
+        self.is_dragging = False
+        self.target_angle = 90.0
+        self.current_angle = 90.0
+        self.interpolation_timer = QTimer(self)
+        self.interpolation_timer.timeout.connect(self.interpolate_angle)
+        self.interpolation_timer.start(16)  # ~60 FPS
+        self.min_detected_strength = 250.0
+        self.max_detected_strength = 1500.0
+        self.zoom_start_pos = None
+        self.zoom_current_pos = None
+        self.is_selecting = False
+
+    def interpolate_angle(self):
+        diff = self.target_angle - self.current_angle
+        if abs(diff) > 0.05:
+            self.current_angle += diff * 0.25
+            self.update()
+        else:
+            self.current_angle = self.target_angle
+
+    def get_target_color(self, strength):
+        s_min = self.min_detected_strength
+        s_max = self.max_detected_strength
+        if abs(s_max - s_min) < 1.0:
+            val = 0.5
+        else:
+            val = (strength - s_min) / (s_max - s_min)
+        val = max(0.0, min(1.0, val))
+        
+        # Multi-color gradient (Jet/Rainbow style): Blue -> Cyan -> Green -> Yellow -> Red
+        stops = [
+            (0.0, (10, 30, 180)),   # Blue (Weak)
+            (0.25, (0, 200, 200)),  # Cyan
+            (0.5, (0, 220, 50)),    # Green
+            (0.75, (255, 200, 0)),  # Yellow
+            (1.0, (255, 30, 30))    # Red (Strong)
+        ]
+        
+        for i in range(len(stops) - 1):
+            s1_val, s1_col = stops[i]
+            s2_val, s2_col = stops[i+1]
+            if s1_val <= val <= s2_val:
+                t = (val - s1_val) / (s2_val - s1_val)
+                r = int(s1_col[0] + (s2_col[0] - s1_col[0]) * t)
+                g = int(s1_col[1] + (s2_col[1] - s1_col[1]) * t)
+                b = int(s1_col[2] + (s2_col[2] - s1_col[2]) * t)
+                return QColor(r, g, b, 170)
+        return QColor(255, 30, 30, 170)
 
     def add_target(self, range_val, angle, strength):
         self.targets.append((range_val, angle, strength))
+        if strength > self.max_detected_strength:
+            self.max_detected_strength = strength
+        if 0 < strength < self.min_detected_strength:
+            self.min_detected_strength = strength
+
+    def _update_sweep_direction(self, angle):
+        angle = float(angle)
+        
+        # Initialize if target_angle is not set
+        if not hasattr(self, '_initialized_angle'):
+            self._initialized_angle = True
+            self.target_angle = angle
+            self.max_angle_in_sweep = angle
+            self.min_angle_in_sweep = angle
+            return
+
+        # Filter out-of-order packets and switch directions at boundaries with hysteresis
+        if self.sweep_direction == 1:  # CCW (increasing angle)
+            self.max_angle_in_sweep = max(self.max_angle_in_sweep, angle)
+            if self.max_angle_in_sweep >= 165.0 and angle <= self.max_angle_in_sweep - 6.0:
+                # Confirmed reversal near the upper boundary
+                self.sweep_direction = -1
+                self.targets = []
+                self.min_angle_in_sweep = angle
+                self.target_angle = angle
+            elif angle > self.target_angle:
+                self.target_angle = angle
+        else:  # CW (decreasing angle)
+            self.min_angle_in_sweep = min(self.min_angle_in_sweep, angle)
+            if self.min_angle_in_sweep <= 15.0 and angle >= self.min_angle_in_sweep + 6.0:
+                # Confirmed reversal near the lower boundary
+                self.sweep_direction = 1
+                self.targets = []
+                self.max_angle_in_sweep = angle
+                self.target_angle = angle
+            elif angle < self.target_angle:
+                self.target_angle = angle
 
     def set_data(self, angle, samples):
-        if angle != self.current_angle:
-            new_dir = 1 if angle > self.current_angle else -1
-            if new_dir != self.sweep_direction:
-                self.targets = []  # Clear targets on new scan sweep direction change
-            self.sweep_direction = new_dir
-        self.current_angle = angle
+        self._update_sweep_direction(angle)
 
         # Calculate intensities: absolute deviation from median (baseline)
         baseline = np.median(samples)
@@ -97,12 +181,7 @@ class RadarWidget(QWidget):
         self.update()
 
     def set_angle(self, angle):
-        if angle != self.current_angle:
-            new_dir = 1 if angle > self.current_angle else -1
-            if new_dir != self.sweep_direction:
-                self.targets = []
-            self.sweep_direction = new_dir
-        self.current_angle = angle
+        self._update_sweep_direction(angle)
 
         # Decay older sweeps slowly even when idle
         for d in list(self.history.keys()):
@@ -112,6 +191,163 @@ class RadarWidget(QWidget):
                     del self.history[d]
         self.update()
 
+    def wheelEvent(self, event):
+        angle = event.angleDelta().y()
+        old_zoom = self.zoom_factor
+        if angle > 0:
+            self.zoom_factor = min(self.zoom_factor * 1.15, 15.0)
+        else:
+            self.zoom_factor = max(self.zoom_factor / 1.15, 1.0)
+        
+        if self.zoom_factor == 1.0:
+            self.pan_x = 0.0
+            self.pan_y = 0.0
+        else:
+            # Zoom centered on mouse cursor
+            mouse_pos = event.position()
+            mx, my = mouse_pos.x(), mouse_pos.y()
+            
+            cx = self.width() // 2
+            cy = int(self.height() * 0.9)
+            
+            dx = mx - cx - self.pan_x
+            dy = my - cy - self.pan_y
+            
+            ratio = self.zoom_factor / old_zoom
+            self.pan_x = mx - cx - dx * ratio
+            self.pan_y = my - cy - dy * ratio
+            
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Start zoom box selection
+            self.zoom_start_pos = event.position()
+            self.zoom_current_pos = event.position()
+            self.is_selecting = True
+        elif event.button() == Qt.MouseButton.RightButton:
+            # Start panning
+            self.drag_start = event.position()
+            self.is_dragging = True
+
+    def mouseMoveEvent(self, event):
+        if self.is_selecting and self.zoom_start_pos is not None:
+            self.zoom_current_pos = event.position()
+            self.update()
+        elif self.is_dragging and self.drag_start is not None and self.zoom_factor > 1.0:
+            curr_pos = event.position()
+            delta = curr_pos - self.drag_start
+            self.pan_x += delta.x()
+            self.pan_y += delta.y()
+            self.drag_start = curr_pos
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.is_selecting:
+            self.is_selecting = False
+            if self.zoom_start_pos and self.zoom_current_pos:
+                x1, y1 = self.zoom_start_pos.x(), self.zoom_start_pos.y()
+                x2, y2 = self.zoom_current_pos.x(), self.zoom_current_pos.y()
+                
+                # Check if drag rectangle is large enough
+                bw = abs(x1 - x2)
+                bh = abs(y1 - y2)
+                if bw > 15 and bh > 15:
+                    bx = (x1 + x2) / 2.0
+                    by = (y1 + y2) / 2.0
+                    
+                    zoom_inc = min(self.width() / bw, self.height() / bh)
+                    old_zoom = self.zoom_factor
+                    self.zoom_factor = min(self.zoom_factor * zoom_inc, 15.0)
+                    
+                    cx = self.width() // 2
+                    cy = int(self.height() * 0.9)
+                    
+                    rx = (bx - cx - self.pan_x) / old_zoom
+                    ry = (by - cy - self.pan_y) / old_zoom
+                    
+                    widget_cx = self.width() // 2
+                    widget_cy = self.height() // 2
+                    
+                    self.pan_x = widget_cx - cx - rx * self.zoom_factor
+                    self.pan_y = widget_cy - cy - ry * self.zoom_factor
+                    
+            self.zoom_start_pos = None
+            self.zoom_current_pos = None
+            self.update()
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.is_dragging = False
+            self.drag_start = None
+
+    def mouseDoubleClickEvent(self, event):
+        # Double click to reset zoom
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_zoom()
+
+    def reset_zoom(self):
+        self.zoom_factor = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.update()
+
+    def get_clustered_targets(self):
+        if not self.targets:
+            return []
+        
+        clusters = []
+        visited = [False] * len(self.targets)
+        for i in range(len(self.targets)):
+            if visited[i]:
+                continue
+            cluster = [self.targets[i]]
+            visited[i] = True
+            queue = [self.targets[i]]
+            while queue:
+                curr = queue.pop(0)
+                curr_r, curr_a, curr_s = curr
+                for j in range(len(self.targets)):
+                    if not visited[j]:
+                        r_j, a_j, s_j = self.targets[j]
+                        ang_diff = abs(curr_a - a_j)
+                        if ang_diff > 180:
+                            ang_diff = 360 - ang_diff
+                        range_diff = abs(curr_r - r_j)
+                        if ang_diff <= 15.0 and range_diff <= 0.25:
+                            visited[j] = True
+                            cluster.append(self.targets[j])
+                            queue.append(self.targets[j])
+            clusters.append(cluster)
+        
+        results = []
+        for cluster in clusters:
+            min_r = min(t[0] for t in cluster)
+            max_r = max(t[0] for t in cluster)
+            min_a = min(t[1] for t in cluster)
+            max_a = max(t[1] for t in cluster)
+            avg_s = sum(t[2] for t in cluster) / len(cluster)
+            
+            # Pad/expand to a minimum visual size for rendering clarity
+            if max_a - min_a < 4.0:
+                center_a = (min_a + max_a) / 2.0
+                min_a = center_a - 2.0
+                max_a = center_a + 2.0
+            if max_r - min_r < 0.05:
+                center_r = (min_r + max_r) / 2.0
+                min_r = max(0.0, center_r - 0.025)
+                max_r = center_r + 0.025
+                
+            results.append({
+                'min_r': min_r,
+                'max_r': max_r,
+                'min_a': min_a,
+                'max_a': max_a,
+                'avg_r': sum(t[0] for t in cluster) / len(cluster),
+                'avg_a': sum(t[1] for t in cluster) / len(cluster),
+                'strength': avg_s,
+                'count': len(cluster)
+            })
+        return results
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -119,15 +355,18 @@ class RadarWidget(QWidget):
         width = self.width()
         height = self.height()
         
+        # Max range in meters
+        max_range = (2048 * 343.0) / (2.0 * 160000.0)  # ~2.1952 meters
+        
         # Draw deep dark space background
         painter.fillRect(self.rect(), QColor("#090d16"))
         
-        # Center of the semi-circle is at the bottom center of the widget
-        center_x = width // 2
-        center_y = int(height * 0.9)
+        # Center of the semi-circle is at the bottom center of the widget, plus pan offsets
+        center_x = width // 2 + int(self.pan_x)
+        center_y = int(height * 0.9) + int(self.pan_y)
         
         # Maximum radius for the radar arcs
-        max_radius = min(width // 2 - 40, int(height * 0.8))
+        max_radius = int(min(width // 2 - 40, int(height * 0.8)) * self.zoom_factor)
         if max_radius < 50:
             return
             
@@ -163,19 +402,26 @@ class RadarWidget(QWidget):
             y = center_y - (max_radius + 15) * np.sin(rad) + offset_y
             painter.drawText(int(x), int(y), f"{angle_deg}°")
             
-        # Draw range markers along the 90 degree axis
+        # Draw range markers along the 90 degree axis in meters
         font.setPointSize(8)
         font.setBold(False)
         painter.setFont(font)
         for i in range(1, 5):
             r = int(max_radius * i / 4)
-            label = f"{int(2048 * i / 4)}"
+            dist_m = max_range * i / 4
+            label = f"{dist_m:.2f}m"
             painter.drawText(center_x + 5, center_y - r - 2, label)
 
         # 1. Draw Sonar echo history using filled quadrilaterals to avoid gaps
         painter.setPen(Qt.PenStyle.NoPen)
         step_half = 1.5  # half of the 3-degree step size
         for deg, intensities in self.history.items():
+            # Filter out history that is ahead of the current visual beam sweep position
+            if self.sweep_direction == 1 and deg > self.current_angle:
+                continue
+            if self.sweep_direction == -1 and deg < self.current_angle:
+                continue
+                
             rad1 = np.radians(deg - step_half)
             rad2 = np.radians(deg + step_half)
             cos1, sin1 = np.cos(rad1), np.sin(rad1)
@@ -210,11 +456,11 @@ class RadarWidget(QWidget):
                         QPointF(p4_x, p4_y)
                     ]))
                     
-        # 2. Draw smooth fading sweep wedge (30 degrees trail, 60 slices of 0.5 degrees)
+        # 2. Draw smooth fading sweep wedge (30 degrees trail, 120 slices of 0.25 degrees)
         painter.setPen(Qt.PenStyle.NoPen)
         trail_dir = -self.sweep_direction
-        num_slices = 60
-        slice_width = 0.5  # degrees
+        num_slices = 120
+        slice_width = 0.25  # degrees
         
         for i in range(num_slices):
             a1_deg = np.clip(self.current_angle + i * slice_width * trail_dir, 0.0, 180.0)
@@ -255,27 +501,100 @@ class RadarWidget(QWidget):
 
         # 4. Draw detected targets
         max_range = (2048 * 343.0) / (2.0 * 160000.0)  # ~2.1952 meters
-        for r_val, a_val, s_val in self.targets:
-            rad = np.radians(a_val)
-            target_r = max_radius * (r_val / max_range)
-            if target_r > max_radius:
-                target_r = max_radius
+        clustered = self.get_clustered_targets()
+        
+        for t in clustered:
+            # Skip targets that are ahead of the current visual sweep ray
+            if self.sweep_direction == 1 and t['avg_a'] > self.current_angle:
+                continue
+            if self.sweep_direction == -1 and t['avg_a'] < self.current_angle:
+                continue
+                
+            min_r_pix = max_radius * (t['min_r'] / max_range)
+            max_r_pix = max_radius * (t['max_r'] / max_range)
             
-            tx = center_x + target_r * np.cos(rad)
-            ty = center_y - target_r * np.sin(rad)
+            if min_r_pix > max_radius:
+                min_r_pix = max_radius
+            if max_r_pix > max_radius:
+                max_r_pix = max_radius
+                
+            polygon_points = []
+            angles = np.linspace(t['min_a'], t['max_a'], 6)
             
-            # Draw target as red circle
-            painter.setPen(QPen(QColor(255, 38, 38, 255), 2))
-            painter.setBrush(QColor(255, 69, 58, 200))
-            painter.drawEllipse(QPointF(tx, ty), 6, 6)
+            # Outer arc
+            for a in angles:
+                rad = np.radians(a)
+                px = center_x + max_r_pix * np.cos(rad)
+                py = center_y - max_r_pix * np.sin(rad)
+                polygon_points.append(QPointF(px, py))
+                
+            # Inner arc
+            for a in reversed(angles):
+                rad = np.radians(a)
+                px = center_x + min_r_pix * np.cos(rad)
+                py = center_y - min_r_pix * np.sin(rad)
+                polygon_points.append(QPointF(px, py))
+                
+            # Semi-transparent body colored by strength, with no border
+            color = self.get_target_color(t['strength'])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            painter.drawPolygon(QPolygonF(polygon_points))
             
-            # Draw range text next to it
+            # Text/Range indicator
+            avg_rad = np.radians(t['avg_a'])
+            avg_r_pix = max_radius * (t['avg_r'] / max_range)
+            tx = center_x + avg_r_pix * np.cos(avg_rad)
+            ty = center_y - avg_r_pix * np.sin(avg_rad)
+            
             font = painter.font()
             font.setPointSize(8)
             font.setBold(True)
             painter.setFont(font)
             painter.setPen(QPen(QColor(255, 69, 58, 220)))
-            painter.drawText(int(tx) + 8, int(ty) + 4, f"{r_val:.2f}m")
+            painter.drawText(int(tx) + 10, int(ty) + 4, f"{t['avg_r']:.2f}m")
+
+        # 5. Draw target strength colorbar on the right
+        cb_width = 12
+        cb_height = 120
+        cb_x = width - 40
+        cb_y = 50
+        
+        # Background/border
+        painter.setPen(QPen(QColor(0, 255, 100, 80), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(cb_x - 1, cb_y - 1, cb_width + 2, cb_height + 2)
+        
+        # Gradient fill
+        for y_offset in range(cb_height):
+            frac = 1.0 - (y_offset / cb_height)
+            strength_val = self.min_detected_strength + frac * (self.max_detected_strength - self.min_detected_strength)
+            color = self.get_target_color(strength_val)
+            painter.setPen(QPen(color, 1))
+            painter.drawLine(cb_x, cb_y + y_offset, cb_x + cb_width, cb_y + y_offset)
+            
+        # Labels
+        font = painter.font()
+        font.setPointSize(8)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(0, 255, 100, 160)))
+        painter.drawText(cb_x - 55, cb_y + 10, f"Max ({int(self.max_detected_strength)})")
+        painter.drawText(cb_x - 55, cb_y + cb_height, f"Min ({int(self.min_detected_strength)})")
+        
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(cb_x - 45, cb_y - 10, "Strength")
+
+        # Draw selection rectangle if active
+        if hasattr(self, 'is_selecting') and self.is_selecting and self.zoom_start_pos and self.zoom_current_pos:
+            x1, y1 = self.zoom_start_pos.x(), self.zoom_start_pos.y()
+            x2, y2 = self.zoom_current_pos.x(), self.zoom_current_pos.y()
+            
+            box_pen = QPen(QColor(0, 255, 100, 200), 1.5, Qt.PenStyle.DashLine)
+            painter.setPen(box_pen)
+            painter.setBrush(QBrush(QColor(0, 255, 100, 25)))
+            painter.drawRect(int(min(x1, x2)), int(min(y1, y2)), int(abs(x1 - x2)), int(abs(y1 - y2)))
 
 class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int)
@@ -509,6 +828,7 @@ class SonarViewer(QMainWindow):
     def reset_zoom(self):
         self.plot_widget.setYRange(0, 3.3)
         self.plot_widget.setXRange(0, 2048)
+        self.radar_widget.reset_zoom()
 
     def change_pulse_type(self):
         pulse_type = self.pulse_type_combo.currentText().lower()
