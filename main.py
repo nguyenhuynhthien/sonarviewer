@@ -74,8 +74,8 @@ class RadarWidget(QWidget):
         self.interpolation_timer = QTimer(self)
         self.interpolation_timer.timeout.connect(self.interpolate_angle)
         self.interpolation_timer.start(16)  # ~60 FPS
-        self.min_detected_strength = 250.0
-        self.max_detected_strength = 1500.0
+        self.min_detected_strength = -50.0
+        self.max_detected_strength = 10.0
         self.zoom_start_pos = None
         self.zoom_current_pos = None
         self.is_selecting = False
@@ -117,11 +117,11 @@ class RadarWidget(QWidget):
                 return QColor(r, g, b, 170)
         return QColor(255, 30, 30, 170)
 
-    def add_target(self, range_val, angle, strength):
-        self.targets.append((range_val, angle, strength))
+    def add_target(self, range_val, angle, strength, velocity=0.0):
+        self.targets.append((range_val, angle, strength, velocity))
         if strength > self.max_detected_strength:
             self.max_detected_strength = strength
-        if 0 < strength < self.min_detected_strength:
+        if strength < self.min_detected_strength:
             self.min_detected_strength = strength
 
     def _update_sweep_direction(self, angle):
@@ -304,10 +304,10 @@ class RadarWidget(QWidget):
             queue = [self.targets[i]]
             while queue:
                 curr = queue.pop(0)
-                curr_r, curr_a, curr_s = curr
+                curr_r, curr_a, curr_s, curr_v = curr
                 for j in range(len(self.targets)):
                     if not visited[j]:
-                        r_j, a_j, s_j = self.targets[j]
+                        r_j, a_j, s_j, v_j = self.targets[j]
                         ang_diff = abs(curr_a - a_j)
                         if ang_diff > 180:
                             ang_diff = 360 - ang_diff
@@ -325,6 +325,7 @@ class RadarWidget(QWidget):
             min_a = min(t[1] for t in cluster)
             max_a = max(t[1] for t in cluster)
             avg_s = sum(t[2] for t in cluster) / len(cluster)
+            avg_v = sum(t[3] for t in cluster) / len(cluster)
             
             # Pad/expand to a minimum visual size for rendering clarity
             if max_a - min_a < 4.0:
@@ -344,6 +345,7 @@ class RadarWidget(QWidget):
                 'avg_r': sum(t[0] for t in cluster) / len(cluster),
                 'avg_a': sum(t[1] for t in cluster) / len(cluster),
                 'strength': avg_s,
+                'velocity': avg_v,
                 'count': len(cluster)
             })
         return results
@@ -552,7 +554,9 @@ class RadarWidget(QWidget):
             font.setBold(True)
             painter.setFont(font)
             painter.setPen(QPen(QColor(255, 69, 58, 220)))
-            painter.drawText(int(tx) + 10, int(ty) + 4, f"{t['avg_r']:.2f}m")
+            v_val = t['velocity']
+            v_str = f" {v_val:+.2f}m/s" if abs(v_val) > 0.01 else ""
+            painter.drawText(int(tx) + 10, int(ty) + 4, f"{t['avg_r']:.2f}m{v_str}")
 
         # 5. Draw target strength colorbar on the right
         cb_width = 12
@@ -579,8 +583,8 @@ class RadarWidget(QWidget):
         font.setBold(False)
         painter.setFont(font)
         painter.setPen(QPen(QColor(0, 255, 100, 160)))
-        painter.drawText(cb_x - 55, cb_y + 10, f"Max ({int(self.max_detected_strength)})")
-        painter.drawText(cb_x - 55, cb_y + cb_height, f"Min ({int(self.min_detected_strength)})")
+        painter.drawText(cb_x - 55, cb_y + 10, f"Max ({self.max_detected_strength:.1f})")
+        painter.drawText(cb_x - 55, cb_y + cb_height, f"Min ({self.min_detected_strength:.1f})")
         
         font.setBold(True)
         painter.setFont(font)
@@ -598,7 +602,7 @@ class RadarWidget(QWidget):
 
 class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int)
-    target_received = pyqtSignal(float, int, float)
+    target_received = pyqtSignal(float, int, float, float)
     status_changed = pyqtSignal(str)
 
     def __init__(self, host='esp32.local', port=8080):
@@ -651,7 +655,7 @@ class DataReceiver(QThread):
                         chunks = {}
                         current_frame_id = None
 
-                        samples = np.frombuffer(full, dtype=np.uint16).astype(np.float32) / 8.0
+                        samples = np.frombuffer(full, dtype=np.uint16).astype(np.float32)
                         voltages = (samples / 4095.0) * 3.3
                         self.data_received.emit(voltages, current_frame_angle)
 
@@ -665,11 +669,13 @@ class DataReceiver(QThread):
                 elif data.startswith(b"target:"):
                     try:
                         parts = data[7:].decode('utf-8').split(',')
-                        if len(parts) == 3:
+                        if len(parts) >= 3:
                             t_range = float(parts[0])
                             t_angle = int(parts[1])
-                            t_strength = float(parts[2])
-                            self.target_received.emit(t_range, t_angle, t_strength)
+                            raw_strength = float(parts[2])
+                            t_strength = 20.0 * np.log10(max(raw_strength, 1.0) / 4095.0 * 3.3)
+                            t_velocity = float(parts[3]) if len(parts) >= 4 else 0.0
+                            self.target_received.emit(t_range, t_angle, t_strength, t_velocity)
                     except ValueError:
                         pass
 
@@ -846,9 +852,9 @@ class SonarViewer(QMainWindow):
         self.get_receiver().send_command(f"mode:{mode}")
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
-    def update_target(self, range_val, angle, strength):
-        self.radar_widget.add_target(range_val, angle, strength)
-        self.info_label.setText(f"Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f}")
+    def update_target(self, range_val, angle, strength, velocity):
+        self.radar_widget.add_target(range_val, angle, strength, velocity)
+        self.info_label.setText(f"Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {velocity:.2f} m/s")
 
     def toggle_servo(self, checked=None):
         state = self.servo_switch.isChecked()
