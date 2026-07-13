@@ -651,7 +651,7 @@ class DataReceiver(QThread):
                         chunks = {}
                         current_frame_id = None
 
-                        samples = np.frombuffer(full, dtype=np.uint16)
+                        samples = np.frombuffer(full, dtype=np.uint16).astype(np.float32) / 8.0
                         voltages = (samples / 4095.0) * 3.3
                         self.data_received.emit(voltages, current_frame_angle)
 
