@@ -599,8 +599,8 @@ class RadarWidget(QWidget):
             painter.drawRect(int(min(x1, x2)), int(min(y1, y2)), int(abs(x1 - x2)), int(abs(y1 - y2)))
 
 class DataReceiver(QThread):
-    data_received = pyqtSignal(np.ndarray, int)
-    target_received = pyqtSignal(float, int, float, float)
+    data_received = pyqtSignal(np.ndarray, int, int)
+    target_received = pyqtSignal(float, int, float, float, int)
     status_changed = pyqtSignal(str)
 
     def __init__(self, host='esp32.local', port=8080, initial_configs=None):
@@ -627,14 +627,13 @@ class DataReceiver(QThread):
                 for cmd in self.initial_configs:
                     self.sock.sendto(cmd.encode('utf-8'), (self.host, self.port))
 
-            CHUNK_HEADER_SIZE = 5
+            CHUNK_HEADER_SIZE = 6
             CHUNK_SAMPLES = 512
             CHUNKS_PER_FRAME = 4
             CHUNK_PACKET_SIZE = CHUNK_HEADER_SIZE + CHUNK_SAMPLES * 2
 
-            current_frame_id = None
-            current_frame_angle = 90
-            chunks = {}
+            current_frame_id = {0: None, 1: None}
+            chunks = {0: {}, 1: {}}
 
             while self.running:
                 try:
@@ -646,27 +645,31 @@ class DataReceiver(QThread):
                     frame_id = data[0] | (data[1] << 8)
                     chunk_idx = data[2]
                     angle = data[3] | (data[4] << 8)
+                    receiver_id = data[5]
                     payload = data[CHUNK_HEADER_SIZE:]
 
-                    if frame_id != current_frame_id:
-                        current_frame_id = frame_id
-                        chunks = {}
+                    if receiver_id not in chunks:
+                        chunks[receiver_id] = {}
+                        current_frame_id[receiver_id] = None
 
-                    chunks[chunk_idx] = payload
-                    current_frame_angle = angle
+                    if frame_id != current_frame_id[receiver_id]:
+                        current_frame_id[receiver_id] = frame_id
+                        chunks[receiver_id] = {}
 
-                    if len(chunks) == CHUNKS_PER_FRAME:
-                        full = b"".join(chunks[i] for i in range(CHUNKS_PER_FRAME))
-                        chunks = {}
-                        current_frame_id = None
+                    chunks[receiver_id][chunk_idx] = payload
+
+                    if len(chunks[receiver_id]) == CHUNKS_PER_FRAME:
+                        full = b"".join(chunks[receiver_id][i] for i in range(CHUNKS_PER_FRAME))
+                        chunks[receiver_id] = {}
+                        current_frame_id[receiver_id] = None
 
                         samples = np.frombuffer(full, dtype=np.int16).astype(np.float32)
-                        self.data_received.emit(samples, current_frame_angle)
+                        self.data_received.emit(samples, angle, receiver_id)
 
                 elif data.startswith(b"ang:"):
                     try:
                         angle = int(data[4:])
-                        self.data_received.emit(np.array([]), angle)
+                        self.data_received.emit(np.array([]), angle, 0)
                     except ValueError:
                         pass
 
@@ -678,6 +681,7 @@ class DataReceiver(QThread):
                             t_angle = int(parts[1])
                             raw_amplitude = float(parts[2])
                             doppler_bin = int(parts[3])
+                            receiver_id = int(parts[4]) if len(parts) >= 5 else 0
                             
                             # Convert range bin to meters
                             filter_len = 104 if self.pulse_type == 'barker13' else 32
@@ -693,7 +697,7 @@ class DataReceiver(QThread):
                             fd = doppler_bin * delta_f if doppler_bin < 8 else (doppler_bin - 16) * delta_f
                             t_velocity = fd * 343.0 / (2.0 * 40000.0)
                             
-                            self.target_received.emit(t_range, t_angle, t_strength, t_velocity)
+                            self.target_received.emit(t_range, t_angle, t_strength, t_velocity, receiver_id)
                     except ValueError:
                         pass
 
@@ -743,8 +747,11 @@ class SonarViewer(QMainWindow):
         self.radar_widget = RadarWidget()
         top_layout.addWidget(self.radar_widget, stretch=2)
 
-        # Đồ thị tín hiệu miền thời gian bên phải
-        self.plot_widget = pg.PlotWidget(title="Received Signal (2048 samples)")
+        # Đồ thị tín hiệu miền thời gian bên phải (gồm 2 đồ thị riêng biệt)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(10)
+
+        self.plot_widget = pg.PlotWidget(title="Rx 1 (GPIO 32) Received Signal")
         self.plot_widget.getViewBox().setMouseMode(pg.ViewBox.RectMode)
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
         self.plot_widget.setYRange(0, 3.3)
@@ -753,7 +760,20 @@ class SonarViewer(QMainWindow):
         self.plot_widget.setLabel('bottom', 'Sample Index')
         self.plot_widget.showGrid(x=True, y=True)
         self.curve = self.plot_widget.plot(pen=pg.mkPen('y', width=1.5))
-        top_layout.addWidget(self.plot_widget, stretch=1)
+        right_layout.addWidget(self.plot_widget)
+
+        self.plot_widget2 = pg.PlotWidget(title="Rx 2 (GPIO 33) Received Signal")
+        self.plot_widget2.getViewBox().setMouseMode(pg.ViewBox.RectMode)
+        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
+        self.plot_widget2.setYRange(0, 3.3)
+        self.plot_widget2.setXRange(0, 2048)
+        self.plot_widget2.setLabel('left', 'Voltage', units='V')
+        self.plot_widget2.setLabel('bottom', 'Sample Index')
+        self.plot_widget2.showGrid(x=True, y=True)
+        self.curve2 = self.plot_widget2.plot(pen=pg.mkPen('m', width=1.5))
+        right_layout.addWidget(self.plot_widget2)
+
+        top_layout.addLayout(right_layout, stretch=1)
 
         # 2. Thanh điều khiển phía dưới (chia làm 2 dòng để vừa với màn hình MacBook)
         ctrl_widget = QWidget()
@@ -884,6 +904,8 @@ class SonarViewer(QMainWindow):
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
         self.plot_widget.setYRange(0, self.current_y_max)
         self.plot_widget.setXRange(0, 2048)
+        self.plot_widget2.setYRange(0, self.current_y_max)
+        self.plot_widget2.setXRange(0, 2048)
         self.radar_widget.reset_zoom()
 
     def toggle_autoscale_cb(self, state):
@@ -893,6 +915,7 @@ class SonarViewer(QMainWindow):
             idx = self.signal_type_combo.currentIndex()
             self.current_y_max = 13.5 if idx == 2 else 3.3
             self.plot_widget.setYRange(0, self.current_y_max)
+            self.plot_widget2.setYRange(0, self.current_y_max)
 
     def change_pulse_type(self):
         pulse_type = self.pulse_type_combo.currentText().lower()
@@ -902,6 +925,7 @@ class SonarViewer(QMainWindow):
         idx = self.signal_type_combo.currentIndex()
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
         self.plot_widget.setYRange(0, self.current_y_max)
+        self.plot_widget2.setYRange(0, self.current_y_max)
 
     def change_signal_type(self):
         idx = self.signal_type_combo.currentIndex()
@@ -921,12 +945,14 @@ class SonarViewer(QMainWindow):
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
         self.plot_widget.setYRange(0, self.current_y_max)
+        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
+        self.plot_widget2.setYRange(0, self.current_y_max)
         self.get_receiver().send_command(f"mode:{mode}")
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
-    def update_target(self, range_val, angle, strength, velocity):
+    def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
         self.radar_widget.add_target(range_val, angle, strength, velocity)
-        self.info_label.setText(f"Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {velocity:+.2f} m/s")
+        self.info_label.setText(f"Rx {receiver_id+1} Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {velocity:+.2f} m/s")
 
     def toggle_servo(self, checked=None):
         state = self.servo_switch.isChecked()
@@ -952,7 +978,7 @@ class SonarViewer(QMainWindow):
             self.is_streaming = True
             self.start_btn.setText("Stop")
 
-    def update_plot(self, samples, angle):
+    def update_plot(self, samples, angle, receiver_id=0):
         if len(samples) > 0:
             # Convert raw Q15 samples to voltages in the main GUI thread
             if np.min(samples) < -1000:
@@ -973,8 +999,11 @@ class SonarViewer(QMainWindow):
             shifted_voltages[:-filter_len] = voltages[filter_len:]
             shifted_voltages[-filter_len:] = np.median(voltages)
             
-            self.radar_widget.set_data(angle, shifted_voltages)
-            self.curve.setData(voltages)
+            if receiver_id == 0:
+                self.radar_widget.set_data(angle, shifted_voltages)
+                self.curve.setData(voltages)
+            else:
+                self.curve2.setData(voltages)
             
             # Peak Hold Auto Scale (keeps Y-axis fit to the maximum peak value)
             if self.autoscale_cb.isChecked() and len(voltages) > 120:
@@ -988,6 +1017,7 @@ class SonarViewer(QMainWindow):
                         if target_y_max > self.current_y_max:
                             self.current_y_max = target_y_max
                             self.plot_widget.setYRange(0, self.current_y_max)
+                            self.plot_widget2.setYRange(0, self.current_y_max)
             
             if self.is_single_shot:
                 self.get_receiver().send_command("stop")
