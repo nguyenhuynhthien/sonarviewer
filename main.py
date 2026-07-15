@@ -82,11 +82,26 @@ class RadarWidget(QWidget):
 
     def interpolate_angle(self):
         diff = self.target_angle - self.current_angle
+        
+        # Decay older sweeps (simulating phosphor decay) at ~60 FPS
+        has_history = False
+        for d in list(self.history.keys()):
+            if d != int(self.target_angle):
+                self.history[d] = self.history[d] * 0.96
+                if np.max(self.history[d]) < 0.02:
+                    del self.history[d]
+                else:
+                    has_history = True
+            else:
+                has_history = True
+                
         if abs(diff) > 0.05:
             self.current_angle += diff * 0.25
             self.update()
         else:
             self.current_angle = self.target_angle
+            if has_history or len(self.targets) > 0:
+                self.update()
 
     def get_target_color(self, strength):
         s_min = self.min_detected_strength
@@ -171,25 +186,8 @@ class RadarWidget(QWidget):
         
         self.history[int(angle)] = normalized
 
-        # Decay older sweeps (simulating phosphor decay)
-        for d in list(self.history.keys()):
-            if d != int(angle):
-                self.history[d] = self.history[d] * 0.92
-                if np.max(self.history[d]) < 0.02:
-                    del self.history[d]
-
-        self.update()
-
     def set_angle(self, angle):
         self._update_sweep_direction(angle)
-
-        # Decay older sweeps slowly even when idle
-        for d in list(self.history.keys()):
-            if d != int(angle):
-                self.history[d] = self.history[d] * 0.95
-                if np.max(self.history[d]) < 0.02:
-                    del self.history[d]
-        self.update()
 
     def wheelEvent(self, event):
         angle = event.angleDelta().y()
@@ -555,8 +553,8 @@ class RadarWidget(QWidget):
             painter.setFont(font)
             painter.setPen(QPen(QColor(255, 69, 58, 220)))
             v_val = t['velocity']
-            v_str = f" {v_val:+.2f}m/s" if abs(v_val) > 0.01 else ""
-            painter.drawText(int(tx) + 10, int(ty) + 4, f"{t['avg_r']:.2f}m{v_str}")
+            v_str = f" {v_val:+.2f} m/s" if abs(v_val) > 0.01 else ""
+            painter.drawText(int(tx) + 10, int(ty) + 4, f"{t['avg_r']:.2f} m{v_str}")
 
         # 5. Draw target strength colorbar on the right
         cb_width = 12
@@ -605,22 +603,29 @@ class DataReceiver(QThread):
     target_received = pyqtSignal(float, int, float, float)
     status_changed = pyqtSignal(str)
 
-    def __init__(self, host='esp32.local', port=8080):
+    def __init__(self, host='esp32.local', port=8080, initial_configs=None):
         super().__init__()
         self.host = host
         self.port = port
         self.running = False
-        self.sock = None
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(2.0)
+        self.pulse_type = 'single'
+        self.initial_configs = initial_configs
 
     def run(self):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.settimeout(2.0)
             self.running = True
 
             # Register client port by sending a ping
             self.sock.sendto(b"ping", (self.host, self.port))
             self.status_changed.emit(f"Connected to {self.host}")
+            
+            # Send initial configurations if provided, with a tiny delay to ensure ping is processed
+            if self.initial_configs:
+                self.msleep(50)
+                for cmd in self.initial_configs:
+                    self.sock.sendto(cmd.encode('utf-8'), (self.host, self.port))
 
             CHUNK_HEADER_SIZE = 5
             CHUNK_SAMPLES = 512
@@ -655,9 +660,8 @@ class DataReceiver(QThread):
                         chunks = {}
                         current_frame_id = None
 
-                        samples = np.frombuffer(full, dtype=np.uint16).astype(np.float32)
-                        voltages = (samples / 4095.0) * 3.3
-                        self.data_received.emit(voltages, current_frame_angle)
+                        samples = np.frombuffer(full, dtype=np.int16).astype(np.float32)
+                        self.data_received.emit(samples, current_frame_angle)
 
                 elif data.startswith(b"ang:"):
                     try:
@@ -669,12 +673,26 @@ class DataReceiver(QThread):
                 elif data.startswith(b"target:"):
                     try:
                         parts = data[7:].decode('utf-8').split(',')
-                        if len(parts) >= 3:
-                            t_range = float(parts[0])
+                        if len(parts) >= 4:
+                            range_bin = int(parts[0])
                             t_angle = int(parts[1])
-                            raw_strength = float(parts[2])
+                            raw_amplitude = float(parts[2])
+                            doppler_bin = int(parts[3])
+                            
+                            # Convert range bin to meters
+                            filter_len = 104 if self.pulse_type == 'barker13' else 32
+                            tof_idx = max(0, range_bin - filter_len)
+                            t_range = (tof_idx * 343.0) / (2.0 * 160000.0)
+                            
+                            # Scale Q15 amplitude (x1024 gain restoration) and convert to dBV
+                            raw_strength = raw_amplitude * 1024.0
                             t_strength = 20.0 * np.log10(max(raw_strength, 1.0) / 4095.0 * 3.3)
-                            t_velocity = float(parts[3]) if len(parts) >= 4 else 0.0
+                            
+                            # Convert doppler bin to velocity (updated for 16-point FFT)
+                            delta_f = 1.0 / (16.0 * (14.0 / 1000.0))  # 4.4643 Hz
+                            fd = doppler_bin * delta_f if doppler_bin < 8 else (doppler_bin - 16) * delta_f
+                            t_velocity = fd * 343.0 / (2.0 * 40000.0)
+                            
                             self.target_received.emit(t_range, t_angle, t_strength, t_velocity)
                     except ValueError:
                         pass
@@ -688,11 +706,12 @@ class DataReceiver(QThread):
                     self.sock.close()
                 except Exception:
                     pass
+                self.sock = None
             self.running = False
             self.status_changed.emit("Disconnected")
 
     def send_command(self, cmd):
-        if self.sock:
+        if self.sock and self.running:
             try:
                 self.sock.sendto(cmd.encode('utf-8'), (self.host, self.port))
             except Exception as e:
@@ -706,6 +725,8 @@ class SonarViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("SonarViewer GUI")
         self.showMaximized()
+        self.current_y_max = 3.3
+        self.latest_voltages = None
 
         # Layout chính dạng dọc
         central_widget = QWidget()
@@ -725,6 +746,7 @@ class SonarViewer(QMainWindow):
         # Đồ thị tín hiệu miền thời gian bên phải
         self.plot_widget = pg.PlotWidget(title="Received Signal (2048 samples)")
         self.plot_widget.getViewBox().setMouseMode(pg.ViewBox.RectMode)
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
         self.plot_widget.setYRange(0, 3.3)
         self.plot_widget.setXRange(0, 2048)
         self.plot_widget.setLabel('left', 'Voltage', units='V')
@@ -752,20 +774,20 @@ class SonarViewer(QMainWindow):
         self.single_btn = QPushButton("Single Shot")
         self.single_btn.clicked.connect(self.request_single)
         
-        self.autorange_btn = QPushButton("Auto Range: OFF")
-        self.autorange_btn.setCheckable(True)
-        self.autorange_btn.clicked.connect(self.toggle_autorange)
-
         self.status_label = QLabel()
         self.update_status("Disconnected")
 
         self.pulse_type_combo = QComboBox()
         self.pulse_type_combo.addItems(["Single", "Barker13"])
-        self.pulse_type_combo.currentIndexChanged.connect(self.change_pulse_type)
+        self.pulse_type_combo.activated.connect(self.change_pulse_type)
 
         self.signal_type_combo = QComboBox()
-        self.signal_type_combo.addItems(["Raw Signal", "Demodulated", "Pulse Compressed"])
-        self.signal_type_combo.currentIndexChanged.connect(self.change_signal_type)
+        self.signal_type_combo.addItems(["Raw", "Demodulated", "Compressed"])
+        self.signal_type_combo.activated.connect(self.change_signal_type)
+
+        self.autoscale_cb = QCheckBox("Auto Scale")
+        self.autoscale_cb.setChecked(False)
+        self.autoscale_cb.stateChanged.connect(self.toggle_autoscale_cb)
 
         self.reset_zoom_btn = QPushButton("Reset Zoom")
         self.reset_zoom_btn.clicked.connect(self.reset_zoom)
@@ -778,7 +800,7 @@ class SonarViewer(QMainWindow):
         row1_layout.addWidget(self.ip_input)
         row1_layout.addWidget(self.start_btn)
         row1_layout.addWidget(self.single_btn)
-        row1_layout.addWidget(self.autorange_btn)
+        row1_layout.addWidget(self.autoscale_cb)
         row1_layout.addWidget(self.reset_zoom_btn)
         row1_layout.addWidget(QLabel("Run Servo:"))
         row1_layout.addWidget(self.servo_switch)
@@ -820,55 +842,97 @@ class SonarViewer(QMainWindow):
 
     def get_receiver(self):
         host = self.ip_input.text()
-        if not self.receiver or self.receiver.host != host:
+        if not self.receiver or self.receiver.host != host or not self.receiver.isRunning():
             if self.receiver:
                 self.receiver.stop()
                 self.receiver.wait()
-            self.receiver = DataReceiver(host=host)
+            
+            # Gather current UI configs to send immediately on connection
+            pulse_type = self.pulse_type_combo.currentText().lower()
+            idx = self.signal_type_combo.currentIndex()
+            mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
+            servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
+            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd]
+
+            self.receiver = DataReceiver(host=host, initial_configs=initial_configs)
+            self.receiver.pulse_type = pulse_type
             self.receiver.data_received.connect(self.update_plot)
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self.update_status)
             self.receiver.start()
         return self.receiver
 
+    def send_all_configs(self):
+        # 1. Pulse Type
+        pulse_type = self.pulse_type_combo.currentText().lower()
+        self.get_receiver().pulse_type = pulse_type
+        self.get_receiver().send_command(f"cfg:{pulse_type}")
+        
+        # 2. Signal Stream
+        idx = self.signal_type_combo.currentIndex()
+        mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
+        self.get_receiver().send_command(f"mode:{mode}")
+        
+        # 3. Servo State
+        servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
+        self.get_receiver().send_command(servo_cmd)
+        
+        self.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd}")
+
     def reset_zoom(self):
-        self.plot_widget.setYRange(0, 3.3)
+        idx = self.signal_type_combo.currentIndex()
+        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
+        self.plot_widget.setYRange(0, self.current_y_max)
         self.plot_widget.setXRange(0, 2048)
         self.radar_widget.reset_zoom()
 
+    def toggle_autoscale_cb(self, state):
+        if self.autoscale_cb.isChecked():
+            self.current_y_max = 0.01  # Set to tiny value so next frame auto-scales to current peak
+        else:
+            idx = self.signal_type_combo.currentIndex()
+            self.current_y_max = 13.5 if idx == 2 else 3.3
+            self.plot_widget.setYRange(0, self.current_y_max)
+
     def change_pulse_type(self):
         pulse_type = self.pulse_type_combo.currentText().lower()
+        self.get_receiver().pulse_type = pulse_type
         self.get_receiver().send_command(f"cfg:{pulse_type}")
         self.info_label.setText(f"Config sent: {pulse_type}")
+        idx = self.signal_type_combo.currentIndex()
+        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
+        self.plot_widget.setYRange(0, self.current_y_max)
 
     def change_signal_type(self):
         idx = self.signal_type_combo.currentIndex()
         if idx == 0:
             mode = "raw"
+            y_lim = 3.5
+            default_y = 3.3
         elif idx == 1:
             mode = "demod"
+            y_lim = 3.5
+            default_y = 3.3
         else:
             mode = "compressed"
+            y_lim = 15.0
+            default_y = 13.5
+        
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
+        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
+        self.plot_widget.setYRange(0, self.current_y_max)
         self.get_receiver().send_command(f"mode:{mode}")
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
     def update_target(self, range_val, angle, strength, velocity):
         self.radar_widget.add_target(range_val, angle, strength, velocity)
-        self.info_label.setText(f"Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {velocity:.2f} m/s")
+        self.info_label.setText(f"Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {velocity:+.2f} m/s")
 
     def toggle_servo(self, checked=None):
         state = self.servo_switch.isChecked()
         cmd = "servo:on" if state else "servo:off"
         self.get_receiver().send_command(cmd)
         self.info_label.setText(f"Servo command sent: {cmd}")
-
-    def toggle_autorange(self):
-        if self.autorange_btn.isChecked():
-            self.autorange_btn.setText("Auto Range: ON")
-            self.plot_widget.enableAutoRange(axis='y', enable=True)
-        else:
-            self.autorange_btn.setText("Auto Range: OFF")
-            self.plot_widget.setYRange(0, 3.3)
 
     def request_single(self):
         self.is_single_shot = True
@@ -890,8 +954,40 @@ class SonarViewer(QMainWindow):
 
     def update_plot(self, samples, angle):
         if len(samples) > 0:
-            self.radar_widget.set_data(angle, samples)
-            self.curve.setData(samples)
+            # Convert raw Q15 samples to voltages in the main GUI thread
+            if np.min(samples) < -1000:
+                voltages = (samples / 32768.0) * 1.65 + 1.65
+            elif self.signal_type_combo.currentIndex() == 2:
+                # Compressed mode can go up to 13.2V mathematically
+                voltages = np.clip((samples / 8192.0) * 3.3, 0.0, 13.2)
+            else:
+                voltages = (samples / 32768.0) * 3.3
+
+            self.latest_voltages = voltages
+            
+            # Shift voltages to align radar history with the target distance (correcting for filter delay)
+            pulse_type = self.pulse_type_combo.currentText().lower()
+            filter_len = 104 if pulse_type == 'barker13' else 32
+            
+            shifted_voltages = np.zeros_like(voltages)
+            shifted_voltages[:-filter_len] = voltages[filter_len:]
+            shifted_voltages[-filter_len:] = np.median(voltages)
+            
+            self.radar_widget.set_data(angle, shifted_voltages)
+            self.curve.setData(voltages)
+            
+            # Peak Hold Auto Scale (keeps Y-axis fit to the maximum peak value)
+            if self.autoscale_cb.isChecked() and len(voltages) > 120:
+                active_voltages = voltages[120:]
+                valid_samples = active_voltages[np.isfinite(active_voltages)]
+                if len(valid_samples) > 0:
+                    peak = np.max(valid_samples)
+                    if np.isfinite(peak):
+                        max_cap = 13.5 if self.signal_type_combo.currentIndex() == 2 else 3.3
+                        target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                        if target_y_max > self.current_y_max:
+                            self.current_y_max = target_y_max
+                            self.plot_widget.setYRange(0, self.current_y_max)
             
             if self.is_single_shot:
                 self.get_receiver().send_command("stop")
