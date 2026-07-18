@@ -61,8 +61,8 @@ class RadarWidget(QWidget):
         self.current_angle = 90
         self.sweep_direction = 1  # 1 for CCW (increasing), -1 for CW (decreasing)
         self.history = {}  # Maps angle (int) -> numpy array of normalized intensities
-        self.max_samples = 1024
-        self.downsample_factor = 8  # 1024 / 8 = 128 bins
+        self.max_samples = 2048
+        self.downsample_factor = 16  # 2048 / 16 = 128 bins
         self.targets = []  # List of (range, angle, strength)
         self.zoom_factor = 1.0
         self.pan_x = 0.0
@@ -96,7 +96,7 @@ class RadarWidget(QWidget):
                 has_history = True
                 
         if abs(diff) > 0.05:
-            self.current_angle += diff * 0.25
+            self.current_angle += diff * 0.30
             self.update()
         else:
             self.current_angle = self.target_angle
@@ -140,40 +140,24 @@ class RadarWidget(QWidget):
             self.min_detected_strength = strength
 
     def _update_sweep_direction(self, angle):
-        angle = float(angle)
+        angle_int = int(angle)
+        direction = -1 if (angle_int & 0x8000) else 1
+        clean_angle = angle_int & 0x7FFF
         
-        # Initialize if target_angle is not set
-        if not hasattr(self, '_initialized_angle'):
-            self._initialized_angle = True
-            self.target_angle = angle
-            self.max_angle_in_sweep = angle
-            self.min_angle_in_sweep = angle
-            return
-
-        # Filter out-of-order packets and switch directions at boundaries with hysteresis
-        if self.sweep_direction == 1:  # CCW (increasing angle)
-            self.max_angle_in_sweep = max(self.max_angle_in_sweep, angle)
-            if self.max_angle_in_sweep >= 165.0 and angle <= self.max_angle_in_sweep - 6.0:
-                # Confirmed reversal near the upper boundary
-                self.sweep_direction = -1
-                self.targets = []
-                self.min_angle_in_sweep = angle
-                self.target_angle = angle
-            elif angle > self.target_angle:
-                self.target_angle = angle
-        else:  # CW (decreasing angle)
-            self.min_angle_in_sweep = min(self.min_angle_in_sweep, angle)
-            if self.min_angle_in_sweep <= 15.0 and angle >= self.min_angle_in_sweep + 6.0:
-                # Confirmed reversal near the lower boundary
-                self.sweep_direction = 1
-                self.targets = []
-                self.max_angle_in_sweep = angle
-                self.target_angle = angle
-            elif angle < self.target_angle:
-                self.target_angle = angle
+        self.sweep_direction = direction
+        self.target_angle = float(clean_angle)
+        
+        if not hasattr(self, '_last_sweep_direction'):
+            self._last_sweep_direction = self.sweep_direction
+            
+        if self.sweep_direction != self._last_sweep_direction:
+            self.targets = []
+            self._last_sweep_direction = self.sweep_direction
+            
+        return clean_angle
 
     def set_data(self, angle, samples):
-        self._update_sweep_direction(angle)
+        clean_angle = self._update_sweep_direction(angle)
 
         # Calculate intensities: absolute deviation from median (baseline)
         baseline = np.median(samples)
@@ -184,7 +168,7 @@ class RadarWidget(QWidget):
         max_val = np.max(downsampled) if np.max(downsampled) > 0 else 1.0
         normalized = downsampled / max_val
         
-        self.history[int(angle)] = normalized
+        self.history[int(clean_angle)] = normalized
 
     def set_angle(self, angle):
         self._update_sweep_direction(angle)
@@ -631,11 +615,11 @@ class DataReceiver(QThread):
 
             CHUNK_HEADER_SIZE = 6
             CHUNK_SAMPLES = 512
-            CHUNKS_PER_FRAME = 2
+            CHUNKS_PER_FRAME = 4
             CHUNK_PACKET_SIZE = CHUNK_HEADER_SIZE + CHUNK_SAMPLES * 2
 
-            current_frame_id = {0: None, 1: None}
-            chunks = {0: {}, 1: {}}
+            current_frame_id = {0: None, 1: None, 2: None}
+            chunks = {0: {}, 1: {}, 2: {}}
 
             while self.running:
                 try:
@@ -695,7 +679,7 @@ class DataReceiver(QThread):
                             t_strength = 20.0 * np.log10(max(raw_strength, 1.0) / 4095.0 * 3.3)
                             
                             # Convert doppler bin to velocity (updated with exact constant PRI values)
-                            pri = 0.012 if self.pulse_type == 'single' else 0.018
+                            pri = 0.030
                             delta_f = 1.0 / (16.0 * pri)
                             fd = doppler_bin * delta_f if doppler_bin < 8 else (doppler_bin - 16) * delta_f
                             t_velocity = - fd * 343.0 / (2.0 * 40000.0)
@@ -757,9 +741,9 @@ class SonarViewer(QMainWindow):
 
         self.plot_widget0 = pg.PlotWidget(title="Rx 0 (Sum Channel) Received Signal")
         self.plot_widget0.getViewBox().setMouseMode(pg.ViewBox.RectMode)
-        self.plot_widget0.getViewBox().setLimits(xMin=0, xMax=1024, yMin=-0.2, yMax=15.0)
+        self.plot_widget0.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=15.0)
         self.plot_widget0.setYRange(0, 13.5)
-        self.plot_widget0.setXRange(0, 1024)
+        self.plot_widget0.setXRange(0, 2048)
         self.plot_widget0.setLabel('left', 'Voltage', units='V')
         self.plot_widget0.setLabel('bottom', 'Sample Index')
         self.plot_widget0.showGrid(x=True, y=True)
@@ -768,9 +752,9 @@ class SonarViewer(QMainWindow):
 
         self.plot_widget = pg.PlotWidget(title="Rx 1 (GPIO 32) Received Signal")
         self.plot_widget.getViewBox().setMouseMode(pg.ViewBox.RectMode)
-        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=1024, yMin=-0.2, yMax=3.5)
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
         self.plot_widget.setYRange(0, 3.3)
-        self.plot_widget.setXRange(0, 1024)
+        self.plot_widget.setXRange(0, 2048)
         self.plot_widget.setLabel('left', 'Voltage', units='V')
         self.plot_widget.setLabel('bottom', 'Sample Index')
         self.plot_widget.showGrid(x=True, y=True)
@@ -779,9 +763,9 @@ class SonarViewer(QMainWindow):
 
         self.plot_widget2 = pg.PlotWidget(title="Rx 2 (GPIO 33) Received Signal")
         self.plot_widget2.getViewBox().setMouseMode(pg.ViewBox.RectMode)
-        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=1024, yMin=-0.2, yMax=3.5)
+        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
         self.plot_widget2.setYRange(0, 3.3)
-        self.plot_widget2.setXRange(0, 1024)
+        self.plot_widget2.setXRange(0, 2048)
         self.plot_widget2.setLabel('left', 'Voltage', units='V')
         self.plot_widget2.setLabel('bottom', 'Sample Index')
         self.plot_widget2.showGrid(x=True, y=True)
@@ -931,11 +915,11 @@ class SonarViewer(QMainWindow):
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
         self.current_y_max0 = 0.01 if self.autoscale_cb.isChecked() else 13.5
         self.plot_widget0.setYRange(0, self.current_y_max0)
-        self.plot_widget0.setXRange(0, 1024)
+        self.plot_widget0.setXRange(0, 2048)
         self.plot_widget.setYRange(0, self.current_y_max)
-        self.plot_widget.setXRange(0, 1024)
+        self.plot_widget.setXRange(0, 2048)
         self.plot_widget2.setYRange(0, self.current_y_max)
-        self.plot_widget2.setXRange(0, 1024)
+        self.plot_widget2.setXRange(0, 2048)
         self.radar_widget.reset_zoom()
 
     def toggle_autoscale_cb(self, state):
@@ -977,9 +961,9 @@ class SonarViewer(QMainWindow):
             y_lim = 15.0
             default_y = 13.5
         
-        self.plot_widget0.getViewBox().setLimits(xMin=0, xMax=1024, yMin=-0.2, yMax=15.0)
-        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=1024, yMin=-0.2, yMax=y_lim)
-        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=1024, yMin=-0.2, yMax=y_lim)
+        self.plot_widget0.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=15.0)
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
+        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
         
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
         self.current_y_max0 = 0.01 if self.autoscale_cb.isChecked() else 13.5
@@ -991,6 +975,10 @@ class SonarViewer(QMainWindow):
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
     def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
+        # Extract clean angle (MSB is sweep direction)
+        angle_int = int(angle)
+        clean_angle = angle_int & 0x7FFF
+
         # Apply exponential moving average (IIR filter) to smooth velocity display
         if not hasattr(self, '_smooth_velocity'):
             self._smooth_velocity = {}
@@ -1001,11 +989,11 @@ class SonarViewer(QMainWindow):
             
         disp_velocity = self._smooth_velocity[receiver_id]
 
-        self.radar_widget.add_target(range_val, angle, strength, disp_velocity)
+        self.radar_widget.add_target(range_val, clean_angle, strength, disp_velocity)
         if receiver_id == 0:
-            self.info_label.setText(f"Sum Channel Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+            self.info_label.setText(f"Sum Channel Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
         else:
-            self.info_label.setText(f"Rx {receiver_id} Target: {range_val:.2f} m | Angle: {angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+            self.info_label.setText(f"Rx {receiver_id} Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
 
     def toggle_servo(self, checked=None):
         state = self.servo_switch.isChecked()
