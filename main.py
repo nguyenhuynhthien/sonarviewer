@@ -790,6 +790,18 @@ class SonarViewer(QMainWindow):
 
         top_layout.addLayout(right_layout, stretch=1)
 
+        # SNR Labels overlaying the plot widgets
+        self.snr_label0 = QLabel("SNR: -- dB", self.plot_widget0)
+        self.snr_label = QLabel("SNR: -- dB", self.plot_widget)
+        self.snr_label2 = QLabel("SNR: -- dB", self.plot_widget2)
+        
+        for label in [self.snr_label0, self.snr_label, self.snr_label2]:
+            label.setStyleSheet("color: #4CD964; background-color: rgba(9, 13, 22, 200); border: 1px solid rgba(0, 255, 100, 100); padding: 3px 6px; border-radius: 4px; font-family: Menlo, Monaco, 'Courier New', monospace; font-size: 11px; font-weight: bold;")
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            label.setFixedWidth(90)
+            label.setFixedHeight(22)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         # 2. Thanh điều khiển phía dưới (chia làm 2 dòng để vừa với màn hình MacBook)
         ctrl_widget = QWidget()
         ctrl_layout = QVBoxLayout(ctrl_widget)
@@ -1033,8 +1045,77 @@ class SonarViewer(QMainWindow):
                     voltages = np.clip((samples / 8192.0) * 3.3, 0.0, 13.2)
                 else:
                     voltages = (samples / 32768.0) * 3.3
-
+            
             self.latest_voltages = voltages
+
+            # Calculate SNR using windowed Signal RMS to Noise RMS
+            if len(voltages) > 120:
+                active_voltages = voltages[120:]
+                baseline = np.median(active_voltages)
+                deviation = np.abs(active_voltages - baseline)
+                
+                # Find peak index using a smoothed deviation to target coherent pulses and reject single-sample noise spikes
+                smoothing_win = 5
+                smoothed_dev = np.convolve(deviation, np.ones(smoothing_win)/smoothing_win, mode='same')
+                peak_idx_active = np.argmax(smoothed_dev)
+                peak_idx = 120 + peak_idx_active
+                
+                # Define CFAR-like window parameters (CUT, Guard, and Reference Cells)
+                pulse_type = self.pulse_type_combo.currentText().lower()
+                if pulse_type == 'barker13':
+                    cut_size = 5      # Cell Under Test: small window containing the compressed peak
+                    guard_size = 6     # Guard cells on each side to prevent signal leakage
+                else:
+                    cut_size = 7      # Cell Under Test: peak core
+                    guard_size = 16    # Guard cells on each side to cover the rest of the 32-sample pulse
+                
+                # Define CUT (Signal) region
+                cut_start = max(120, peak_idx - cut_size // 2)
+                cut_end = min(len(voltages), peak_idx + cut_size // 2 + 1)
+                signal_samples = voltages[cut_start:cut_end]
+                
+                # Define Guard region boundaries (to be excluded from Noise Reference Cells)
+                guard_start = max(120, peak_idx - cut_size // 2 - guard_size)
+                guard_end = min(len(voltages), peak_idx + cut_size // 2 + guard_size + 1)
+                
+                # Reference Cells (Noise region): active region excluding the Guard zone
+                noise_samples = np.concatenate([voltages[120:guard_start], voltages[guard_end:]])
+                
+                # Signal RMS (AC component of the target peak inside CUT)
+                signal_rms = np.sqrt(np.mean((signal_samples - baseline) ** 2))
+                
+                # Noise RMS using robust MAD on isolated Reference Cells
+                noise_baseline = np.median(noise_samples)
+                noise_deviation = np.abs(noise_samples - noise_baseline)
+                mad = np.median(noise_deviation)
+                noise_rms = mad / 0.6745 if mad > 1e-6 else np.std(noise_samples)
+                
+                if noise_rms > 1e-6 and signal_rms > 1e-6:
+                    raw_snr = 20 * np.log10(signal_rms / noise_rms)
+                    
+                    # Calibrate out the peak selection bias (noise floor peaks)
+                    is_compressed = (receiver_id == 0) or (self.signal_type_combo.currentIndex() == 2)
+                    bias = 8.0 if is_compressed else 6.2
+                    
+                    calibrated_snr = raw_snr - bias
+                    
+                    # Display targets down to 1.0 dB of calibrated SNR
+                    if calibrated_snr > 1.0:
+                        snr_str = f"SNR: {calibrated_snr:.1f} dB"
+                    else:
+                        snr_str = "SNR: -- dB"
+                else:
+                    snr_str = "SNR: -- dB"
+            else:
+                snr_str = "SNR: -- dB"
+
+            # Update corresponding SNR label
+            if receiver_id == 0:
+                self.snr_label0.setText(snr_str)
+            elif receiver_id == 1:
+                self.snr_label.setText(snr_str)
+            elif receiver_id == 2:
+                self.snr_label2.setText(snr_str)
             
             # Shift voltages to align radar history with the target distance (correcting for filter delay)
             pulse_type = self.pulse_type_combo.currentText().lower()
@@ -1081,6 +1162,20 @@ class SonarViewer(QMainWindow):
                 self.start_btn.setText("Start Continuous")
         else:
             self.radar_widget.set_angle(angle)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reposition_snr_labels()
+
+    def reposition_snr_labels(self):
+        if not hasattr(self, 'snr_label0') or not hasattr(self, 'snr_label') or not hasattr(self, 'snr_label2'):
+            return
+        for label, plot in [(self.snr_label0, self.plot_widget0), 
+                             (self.snr_label, self.plot_widget), 
+                             (self.snr_label2, self.plot_widget2)]:
+            if label and plot:
+                # Position in top right corner of the plot widget, offset from the right boundary to avoid scrollbar/axes
+                label.move(plot.width() - 100, 10)
 
     def closeEvent(self, event):
         if self.receiver:
