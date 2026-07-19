@@ -56,8 +56,11 @@ class ToggleSwitch(QAbstractButton):
         painter.drawEllipse(self._pos, 3, 20, 20)
 
 class RadarWidget(QWidget):
+    angle_requested = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.servo_enabled = False
         self.current_angle = 90
         self.sweep_direction = 1  # 1 for CCW (increasing), -1 for CW (decreasing)
         self.history = {}  # Maps angle (int) -> numpy array of normalized intensities
@@ -201,19 +204,45 @@ class RadarWidget(QWidget):
             
         self.update()
 
+    def handle_angle_select(self, event):
+        pos = event.position()
+        mx, my = pos.x(), pos.y()
+        width = self.width()
+        height = self.height()
+        center_x = width // 2 + int(self.pan_x)
+        center_y = int(height * 0.9) + int(self.pan_y)
+        dx = mx - center_x
+        dy = center_y - my
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = int(np.degrees(angle_rad))
+        if angle_deg < 0:
+            if dx >= 0:
+                angle_deg = 0
+            else:
+                angle_deg = 180
+        angle_deg = max(0, min(180, angle_deg))
+        self.angle_requested.emit(angle_deg)
+        self.target_angle = float(angle_deg)
+        self.update()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Start zoom box selection
-            self.zoom_start_pos = event.position()
-            self.zoom_current_pos = event.position()
-            self.is_selecting = True
+            if not self.servo_enabled:
+                self.handle_angle_select(event)
+            else:
+                # Start zoom box selection
+                self.zoom_start_pos = event.position()
+                self.zoom_current_pos = event.position()
+                self.is_selecting = True
         elif event.button() == Qt.MouseButton.RightButton:
             # Start panning
             self.drag_start = event.position()
             self.is_dragging = True
 
     def mouseMoveEvent(self, event):
-        if self.is_selecting and self.zoom_start_pos is not None:
+        if not self.servo_enabled and event.buttons() & Qt.MouseButton.LeftButton:
+            self.handle_angle_select(event)
+        elif self.is_selecting and self.zoom_start_pos is not None:
             self.zoom_current_pos = event.position()
             self.update()
         elif self.is_dragging and self.drag_start is not None and self.zoom_factor > 1.0:
@@ -346,6 +375,15 @@ class RadarWidget(QWidget):
         
         # Draw deep dark space background
         painter.fillRect(self.rect(), QColor("#090d16"))
+
+        # Draw current servo angle on top-left corner
+        text_pen = QPen(QColor(0, 255, 100, 220))
+        painter.setPen(text_pen)
+        font = painter.font()
+        font.setPointSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(20, 30, f"Servo Angle: {int(self.current_angle)}°")
         
         # Center of the semi-circle is at the bottom center of the widget, plus pan offsets
         center_x = width // 2 + int(self.pan_x)
@@ -613,6 +651,7 @@ class DataReceiver(QThread):
                 self.msleep(50)
                 for cmd in self.initial_configs:
                      self.sock.sendto(cmd.encode('utf-8'), (self.host, self.port))
+                     self.msleep(15)
 
             CHUNK_HEADER_SIZE = 4
             CHUNK_SAMPLES = 512
@@ -734,6 +773,7 @@ class SonarViewer(QMainWindow):
         main_layout.addLayout(top_layout, stretch=3)
 
         self.radar_widget = RadarWidget()
+        self.radar_widget.angle_requested.connect(self.send_servo_angle)
         top_layout.addWidget(self.radar_widget, stretch=2)
 
         # Đồ thị tín hiệu miền thời gian bên phải (gồm 3 đồ thị riêng biệt)
@@ -914,13 +954,14 @@ class SonarViewer(QMainWindow):
             idx = self.signal_type_combo.currentIndex()
             mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
             servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
+            self.radar_widget.servo_enabled = self.servo_switch.isChecked()
             
             txt = self.tx_atten_combo.currentText()
             atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
             atten_cmd = f"tx_atten:{atten_val}"
             tx_cmd = "tx:on" if self.tx_switch.isChecked() else "tx:off"
 
-            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, "start"]
+            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, "servo:90", "start"]
 
             self.receiver = DataReceiver(host=host, initial_configs=initial_configs)
             self.receiver.pulse_type = pulse_type
@@ -929,6 +970,10 @@ class SonarViewer(QMainWindow):
             self.receiver.status_changed.connect(self.update_status)
             self.receiver.start()
         return self.receiver
+
+    def send_servo_angle(self, angle):
+        if not self.servo_switch.isChecked():
+            self.get_receiver().send_command(f"servo:{angle}")
 
     def change_tx_attenuation(self):
         txt = self.tx_atten_combo.currentText()
@@ -1058,6 +1103,7 @@ class SonarViewer(QMainWindow):
 
     def toggle_servo(self, checked=None):
         state = self.servo_switch.isChecked()
+        self.radar_widget.servo_enabled = state
         cmd = "servo:on" if state else "servo:off"
         self.get_receiver().send_command(cmd)
         self.info_label.setText(f"Servo command sent: {cmd}")
