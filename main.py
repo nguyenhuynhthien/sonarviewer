@@ -800,8 +800,8 @@ class SonarViewer(QMainWindow):
 
         self.ip_input = QLineEdit("esp32.local")
         self.ip_input.setFixedWidth(120)
-        self.start_btn = QPushButton("Start Continuous")
-        self.start_btn.clicked.connect(self.toggle_stream)
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.clicked.connect(self.toggle_pause)
         
         self.single_btn = QPushButton("Single Shot")
         self.single_btn.clicked.connect(self.request_single)
@@ -817,6 +817,10 @@ class SonarViewer(QMainWindow):
         self.signal_type_combo.addItems(["Raw", "Demodulated", "Compressed"])
         self.signal_type_combo.activated.connect(self.change_signal_type)
 
+        self.tx_atten_combo = QComboBox()
+        self.tx_atten_combo.addItems(["0 dB", "-6 dB", "-12 dB", "-18 dB", "-24 dB", "Mute"])
+        self.tx_atten_combo.activated.connect(self.change_tx_attenuation)
+
         self.autoscale_cb = QCheckBox("Auto Scale")
         self.autoscale_cb.setChecked(False)
         self.autoscale_cb.stateChanged.connect(self.toggle_autoscale_cb)
@@ -827,15 +831,38 @@ class SonarViewer(QMainWindow):
         self.servo_switch = ToggleSwitch()
         self.servo_switch.clicked.connect(self.toggle_servo)
 
+        self.tx_switch = ToggleSwitch()
+        self.tx_switch.clicked.connect(self.toggle_tx)
+
+        # Group Tx On label and switch closer in a QWidget
+        tx_widget = QWidget()
+        tx_layout = QHBoxLayout(tx_widget)
+        tx_layout.setSpacing(5)
+        tx_layout.setContentsMargins(0, 0, 0, 0)
+        tx_layout.addWidget(QLabel("Tx On:"))
+        tx_layout.addWidget(self.tx_switch)
+        tx_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # Group Servo label and switch closer in a QWidget
+        servo_widget = QWidget()
+        servo_layout = QHBoxLayout(servo_widget)
+        servo_layout.setSpacing(5)
+        servo_layout.setContentsMargins(0, 0, 0, 0)
+        servo_layout.addWidget(QLabel("Run Servo:"))
+        servo_layout.addWidget(self.servo_switch)
+        servo_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
         # Dòng 1: Cấu hình kết nối và điều khiển
         row1_layout.addWidget(QLabel("ESP32 IP:"))
         row1_layout.addWidget(self.ip_input)
-        row1_layout.addWidget(self.start_btn)
+        row1_layout.addWidget(self.pause_btn)
         row1_layout.addWidget(self.single_btn)
         row1_layout.addWidget(self.autoscale_cb)
         row1_layout.addWidget(self.reset_zoom_btn)
-        row1_layout.addWidget(QLabel("Run Servo:"))
-        row1_layout.addWidget(self.servo_switch)
+        row1_layout.addSpacing(15)
+        row1_layout.addWidget(tx_widget)
+        row1_layout.addSpacing(15)
+        row1_layout.addWidget(servo_widget)
         
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: #8E8E93; font-style: italic; margin-right: 15px;")
@@ -845,6 +872,8 @@ class SonarViewer(QMainWindow):
         row2_layout.addWidget(self.pulse_type_combo)
         row2_layout.addWidget(QLabel("Signal Stream:"))
         row2_layout.addWidget(self.signal_type_combo)
+        row2_layout.addWidget(QLabel("Tx Attenuation:"))
+        row2_layout.addWidget(self.tx_atten_combo)
         row2_layout.addStretch()
         row2_layout.addWidget(self.info_label)
         row2_layout.addWidget(self.status_label)
@@ -855,7 +884,8 @@ class SonarViewer(QMainWindow):
         main_layout.addWidget(ctrl_widget, stretch=1)
 
         self.receiver = None
-        self.is_streaming = False
+        self.is_streaming = True
+        self.is_paused = False
         self.is_single_shot = False
 
         # Start continuous receiver thread on startup
@@ -884,7 +914,13 @@ class SonarViewer(QMainWindow):
             idx = self.signal_type_combo.currentIndex()
             mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
             servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
-            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd]
+            
+            txt = self.tx_atten_combo.currentText()
+            atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
+            atten_cmd = f"tx_atten:{atten_val}"
+            tx_cmd = "tx:on" if self.tx_switch.isChecked() else "tx:off"
+
+            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, "start"]
 
             self.receiver = DataReceiver(host=host, initial_configs=initial_configs)
             self.receiver.pulse_type = pulse_type
@@ -893,6 +929,19 @@ class SonarViewer(QMainWindow):
             self.receiver.status_changed.connect(self.update_status)
             self.receiver.start()
         return self.receiver
+
+    def change_tx_attenuation(self):
+        txt = self.tx_atten_combo.currentText()
+        atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
+        cmd = f"tx_atten:{atten_val}"
+        self.get_receiver().send_command(cmd)
+        self.info_label.setText(f"Tx attenuation command sent: {cmd}")
+
+    def toggle_tx(self):
+        state = self.tx_switch.isChecked()
+        cmd = "tx:on" if state else "tx:off"
+        self.get_receiver().send_command(cmd)
+        self.info_label.setText(f"Tx switch command sent: {cmd}")
 
     def send_all_configs(self):
         # 1. Pulse Type
@@ -909,7 +958,16 @@ class SonarViewer(QMainWindow):
         servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
         self.get_receiver().send_command(servo_cmd)
         
-        self.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd}")
+        # 4. Tx Attenuation
+        txt = self.tx_atten_combo.currentText()
+        atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
+        self.get_receiver().send_command(f"tx_atten:{atten_val}")
+        
+        # 5. Tx Switch State
+        tx_cmd = "tx:on" if self.tx_switch.isChecked() else "tx:off"
+        self.get_receiver().send_command(tx_cmd)
+        
+        self.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd}")
 
     def reset_zoom(self):
         idx = self.signal_type_combo.currentIndex()
@@ -976,6 +1034,8 @@ class SonarViewer(QMainWindow):
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
     def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
+        if self.is_paused:
+            return
         # Extract clean angle (MSB is sweep direction)
         angle_int = int(angle)
         clean_angle = angle_int & 0x7FFF
@@ -1006,39 +1066,43 @@ class SonarViewer(QMainWindow):
         self.is_single_shot = True
         self.get_receiver().send_command("start")
         self.is_streaming = True
-        self.start_btn.setText("Stop")
+        self.is_paused = False
+        self.pause_btn.setText("Pause")
 
-    def toggle_stream(self):
+    def toggle_pause(self):
         receiver = self.get_receiver()
-        if self.is_streaming:
+        if not self.is_paused:
             receiver.send_command("stop")
-            self.is_streaming = False
-            self.start_btn.setText("Start Continuous")
+            self.is_paused = True
+            self.pause_btn.setText("Resume")
+            self.info_label.setText("Streaming paused.")
         else:
-            self.is_single_shot = False
+            self.is_paused = False
             receiver.send_command("start")
-            self.is_streaming = True
-            self.start_btn.setText("Stop")
+            self.pause_btn.setText("Pause")
+            self.info_label.setText("Streaming resumed.")
 
     def update_plot(self, samples, angle, receiver_id=0):
+        if self.is_paused:
+            return
         if len(samples) > 0:
             # Convert raw Q15 samples to voltages in the main GUI thread
             if receiver_id == 0:
                 # Rx0 is always Compressed Sum
                 voltages = np.clip((samples / 8192.0) * 3.3, 0.0, 13.2)
             else:
-                if np.min(samples) < -1000:
+                stream_idx = self.signal_type_combo.currentIndex()
+                if stream_idx == 0:  # Raw
                     voltages = (samples / 32768.0) * 1.65 + 1.65
-                elif self.signal_type_combo.currentIndex() == 2:
-                    # Compressed mode can go up to 13.2V mathematically
+                elif stream_idx == 2:  # Compressed
                     voltages = np.clip((samples / 8192.0) * 3.3, 0.0, 13.2)
-                else:
+                else:  # Demodulated
                     voltages = (samples / 32768.0) * 3.3
             
             self.latest_voltages = voltages
 
             # Calculate SNR using windowed Signal RMS to Noise RMS
-            if len(voltages) > 120:
+            if len(voltages) > 120 and self.tx_switch.isChecked():
                 active_voltages = voltages[120:]
                 baseline = np.median(active_voltages)
                 deviation = np.abs(active_voltages - baseline)
@@ -1148,7 +1212,8 @@ class SonarViewer(QMainWindow):
                 self.get_receiver().send_command("stop")
                 self.is_streaming = False
                 self.is_single_shot = False
-                self.start_btn.setText("Start Continuous")
+                self.is_paused = True
+                self.pause_btn.setText("Resume")
         else:
             self.radar_widget.set_angle(angle)
 
