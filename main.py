@@ -598,6 +598,7 @@ class DataReceiver(QThread):
         self.sock.settimeout(2.0)
         self.pulse_type = 'single'
         self.initial_configs = initial_configs
+        self.current_angle = 0
 
     def run(self):
         try:
@@ -611,9 +612,9 @@ class DataReceiver(QThread):
             if self.initial_configs:
                 self.msleep(50)
                 for cmd in self.initial_configs:
-                    self.sock.sendto(cmd.encode('utf-8'), (self.host, self.port))
+                     self.sock.sendto(cmd.encode('utf-8'), (self.host, self.port))
 
-            CHUNK_HEADER_SIZE = 6
+            CHUNK_HEADER_SIZE = 4
             CHUNK_SAMPLES = 512
             CHUNKS_PER_FRAME = 4
             CHUNK_PACKET_SIZE = CHUNK_HEADER_SIZE + CHUNK_SAMPLES * 2
@@ -630,8 +631,7 @@ class DataReceiver(QThread):
                 if len(data) == CHUNK_PACKET_SIZE:
                     frame_id = data[0] | (data[1] << 8)
                     chunk_idx = data[2]
-                    angle = data[3] | (data[4] << 8)
-                    receiver_id = data[5]
+                    receiver_id = data[3]
                     payload = data[CHUNK_HEADER_SIZE:]
 
                     if receiver_id not in chunks:
@@ -650,11 +650,12 @@ class DataReceiver(QThread):
                         current_frame_id[receiver_id] = None
 
                         samples = np.frombuffer(full, dtype=np.int16).astype(np.float32)
-                        self.data_received.emit(samples, angle, receiver_id)
+                        self.data_received.emit(samples, self.current_angle, receiver_id)
 
                 elif data.startswith(b"ang:"):
                     try:
                         angle = int(data[4:])
+                        self.current_angle = angle
                         self.data_received.emit(np.array([]), angle, 0)
                     except ValueError:
                         pass
