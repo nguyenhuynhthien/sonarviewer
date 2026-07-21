@@ -756,9 +756,10 @@ class SonarViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("SonarViewer GUI")
         self.showMaximized()
-        self.current_y_max = 3.3
-        self.current_y_max0 = 13.5
+        self.current_y_max = 0.01
+        self.current_y_max0 = 0.01
         self.latest_voltages = None
+
 
         # Layout chính dạng dọc
         central_widget = QWidget()
@@ -862,8 +863,9 @@ class SonarViewer(QMainWindow):
         self.tx_atten_combo.activated.connect(self.change_tx_attenuation)
 
         self.autoscale_cb = QCheckBox("Auto Scale")
-        self.autoscale_cb.setChecked(False)
+        self.autoscale_cb.setChecked(True)
         self.autoscale_cb.stateChanged.connect(self.toggle_autoscale_cb)
+
 
         self.reset_zoom_btn = QPushButton("Reset Zoom")
         self.reset_zoom_btn.clicked.connect(self.reset_zoom)
@@ -1134,8 +1136,9 @@ class SonarViewer(QMainWindow):
         if len(samples) > 0:
             # Convert raw Q15 samples to voltages in the main GUI thread
             if receiver_id == 0:
-                # Rx0 is always Compressed Sum
-                voltages = np.clip((samples / 8192.0) * 3.3, 0.0, 13.2)
+                # Rx0 is 8-pulse accumulated Sum (Q15 max 32767 -> 13.2V max scale)
+                voltages = (samples / 32767.0) * 13.2
+
             else:
                 stream_idx = self.signal_type_combo.currentIndex()
                 if stream_idx == 0:  # Raw
@@ -1162,11 +1165,12 @@ class SonarViewer(QMainWindow):
                 # Define CFAR-like window parameters (CUT, Guard, and Reference Cells)
                 pulse_type = self.pulse_type_combo.currentText().lower()
                 if pulse_type == 'barker13':
-                    cut_size = 5      # Cell Under Test: small window containing the compressed peak
-                    guard_size = 6     # Guard cells on each side to prevent signal leakage
+                    cut_size = 7       # Cell Under Test: compressed mainlobe peak
+                    guard_size = 52    # Guard cells on each side to cover the full 104-sample Barker 13 response extent
                 else:
-                    cut_size = 7      # Cell Under Test: peak core
+                    cut_size = 7       # Cell Under Test: peak core
                     guard_size = 16    # Guard cells on each side to cover the rest of the 32-sample pulse
+
                 
                 # Define CUT (Signal) region
                 cut_start = max(120, peak_idx - cut_size // 2)
@@ -1180,8 +1184,8 @@ class SonarViewer(QMainWindow):
                 # Reference Cells (Noise region): active region excluding the Guard zone
                 noise_samples = np.concatenate([voltages[120:guard_start], voltages[guard_end:]])
                 
-                # Signal RMS (AC component of the target peak inside CUT)
-                signal_rms = np.sqrt(np.mean((signal_samples - baseline) ** 2))
+                # True Radar Peak Signal Amplitude (AC peak of compressed pulse above baseline)
+                signal_peak = np.max(signal_samples) - baseline
                 
                 # Noise RMS using robust MAD on isolated Reference Cells
                 noise_baseline = np.median(noise_samples)
@@ -1189,8 +1193,9 @@ class SonarViewer(QMainWindow):
                 mad = np.median(noise_deviation)
                 noise_rms = mad / 0.6745 if mad > 1e-6 else np.std(noise_samples)
                 
-                if noise_rms > 1e-6 and signal_rms > 1e-6:
-                    raw_snr = 20 * np.log10(signal_rms / noise_rms)
+                if noise_rms > 1e-6 and signal_peak > 1e-6:
+                    raw_snr = 20 * np.log10(signal_peak / noise_rms)
+
                     
                     # Calibrate out the peak selection bias (noise floor peaks)
                     is_compressed = (receiver_id == 0) or (self.signal_type_combo.currentIndex() == 2)
