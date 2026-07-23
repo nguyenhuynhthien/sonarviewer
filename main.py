@@ -718,10 +718,10 @@ class DataReceiver(QThread):
                             raw_strength = raw_amplitude * 1024.0
                             t_strength = 20.0 * np.log10(max(raw_strength, 1.0) / 4095.0 * 3.3)
                             
-                            # Convert doppler bin to velocity (updated with exact constant PRI values)
+                            # Convert doppler bin to velocity (updated with exact constant PRI values for 8-point FFT)
                             pri = 0.030
-                            delta_f = 1.0 / (16.0 * pri)
-                            fd = doppler_bin * delta_f if doppler_bin < 8 else (doppler_bin - 16) * delta_f
+                            delta_f = 1.0 / (8.0 * pri)
+                            fd = doppler_bin * delta_f if doppler_bin < 4 else (doppler_bin - 8) * delta_f
                             t_velocity = - fd * 343.0 / (2.0 * 40000.0)
                             
                             self.target_received.emit(t_range, t_angle, t_strength, t_velocity, receiver_id)
