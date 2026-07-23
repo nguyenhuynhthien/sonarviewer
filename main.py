@@ -710,7 +710,7 @@ class DataReceiver(QThread):
                             receiver_id = int(parts[4]) if len(parts) >= 5 else 0
                             
                             # Convert range bin to meters
-                            filter_len = 104 if self.pulse_type == 'barker13' else 32
+                            filter_len = 104 if self.pulse_type == 'barker13' else 8
                             tof_idx = max(0, range_bin - filter_len)
                             t_range = (tof_idx * 343.0) / (2.0 * 160000.0)
                             
@@ -1223,7 +1223,7 @@ class SonarViewer(QMainWindow):
             
             # Shift voltages to align radar history with the target distance (correcting for filter delay)
             pulse_type = self.pulse_type_combo.currentText().lower()
-            filter_len = 104 if pulse_type == 'barker13' else 32
+            filter_len = 104 if pulse_type == 'barker13' else 8
             
             shifted_voltages = np.zeros_like(voltages)
             shifted_voltages[:-filter_len] = voltages[filter_len:]
