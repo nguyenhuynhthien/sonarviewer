@@ -703,26 +703,11 @@ class DataReceiver(QThread):
                     try:
                         parts = data[7:].decode('utf-8').split(',')
                         if len(parts) >= 4:
-                            range_bin = int(parts[0])
+                            t_range = float(parts[0])
                             t_angle = int(parts[1])
-                            raw_amplitude = float(parts[2])
-                            doppler_bin = int(parts[3])
+                            t_strength = float(parts[2])
+                            t_velocity = float(parts[3])
                             receiver_id = int(parts[4]) if len(parts) >= 5 else 0
-                            
-                            # Convert range bin to meters
-                            filter_len = 104 if self.pulse_type == 'barker13' else 8
-                            tof_idx = max(0, range_bin - filter_len)
-                            t_range = (tof_idx * 343.0) / (2.0 * 160000.0)
-                            
-                            # Scale Q15 amplitude (x1024 gain restoration) and convert to dBV
-                            raw_strength = raw_amplitude * 1024.0
-                            t_strength = 20.0 * np.log10(max(raw_strength, 1.0) / 4095.0 * 3.3)
-                            
-                            # Convert doppler bin to velocity (updated with exact constant PRI values for 8-point FFT)
-                            pri = 0.030
-                            delta_f = 1.0 / (8.0 * pri)
-                            fd = doppler_bin * delta_f if doppler_bin < 4 else (doppler_bin - 8) * delta_f
-                            t_velocity = - fd * 343.0 / (2.0 * 40000.0)
                             
                             self.target_received.emit(t_range, t_angle, t_strength, t_velocity, receiver_id)
                     except ValueError:
