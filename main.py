@@ -7,6 +7,59 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt, QPropertyAnimation, pyqtProper
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPolygonF
 import pyqtgraph as pg
 
+class CustomZoomViewBox(pg.ViewBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setMouseMode(pg.ViewBox.RectMode)
+        # Tắt toàn bộ padding mặc định khi tự động tính toán dải hiển thị
+        self.setDefaultPadding(0.0)
+
+    def suggestPadding(self, axis):
+        return 0.0
+
+    def showAxRect(self, ax, **kwargs):
+        """Override để ép padding=0 khi zoom bằng kéo chuột (RectMode)"""
+        kwargs['padding'] = 0
+        super().showAxRect(ax, **kwargs)
+
+    def mouseDragEvent(self, ev, axis=None):
+        """Override để sửa lỗi zoom: clip range về limits thay vì để PyQtGraph shift"""
+        if self.state['mouseMode'] == pg.ViewBox.RectMode and ev.button() == Qt.MouseButton.LeftButton:
+            if ev.isFinish():
+                self.rbScaleBox.hide()
+
+                # Dùng scenePos (tuyệt đối) + mapSceneToView để chuyển sang data coordinates
+                p1 = self.mapSceneToView(ev.buttonDownScenePos())
+                p2 = self.mapSceneToView(ev.scenePos())
+
+                x_min = min(p1.x(), p2.x())
+                x_max = max(p1.x(), p2.x())
+                y_min = min(p1.y(), p2.y())
+                y_max = max(p1.y(), p2.y())
+
+                # CLIP về giới hạn (setLimits) thay vì để PyQtGraph shift toàn bộ range
+                lim = self.state['limits']
+                x_lo, x_hi = lim['xLimits']
+                y_lo, y_hi = lim['yLimits']
+                if x_lo is not None: x_min = max(x_min, x_lo)
+                if x_hi is not None: x_max = min(x_max, x_hi)
+                if y_lo is not None: y_min = max(y_min, y_lo)
+                if y_hi is not None: y_max = min(y_max, y_hi)
+
+                if abs(x_max - x_min) > 1e-3 and abs(y_max - y_min) > 1e-3:
+                    self.setRange(xRange=(x_min, x_max), yRange=(y_min, y_max), padding=0)
+                    self.axHistoryPointer += 1
+                    from PyQt6.QtCore import QRectF
+                    self.axHistory = self.axHistory[:self.axHistoryPointer] + [QRectF(x_min, y_min, x_max - x_min, y_max - y_min)]
+                ev.accept()
+            else:
+                self.updateScaleBox(ev.buttonDownPos(), ev.pos())
+                ev.accept()
+        else:
+            super().mouseDragEvent(ev, axis=axis)
+
+
+
 class ToggleSwitch(QAbstractButton):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -762,56 +815,36 @@ class SonarViewer(QMainWindow):
         self.radar_widget.angle_requested.connect(self.send_servo_angle)
         top_layout.addWidget(self.radar_widget, stretch=2)
 
-        # Đồ thị tín hiệu miền thời gian bên phải (gồm 3 đồ thị riêng biệt)
+        # Đồ thị tín hiệu miền thời gian bên phải (gồm 1 đồ thị duy nhất có thể chọn Rx0, Rx1, Rx2)
         right_layout = QVBoxLayout()
         right_layout.setSpacing(10)
 
-        self.plot_widget0 = pg.PlotWidget(title="Rx 0 (Sum Channel) Received Signal")
-        self.plot_widget0.getViewBox().setMouseMode(pg.ViewBox.RectMode)
-        self.plot_widget0.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=15.0)
-        self.plot_widget0.setYRange(0, 13.5)
-        self.plot_widget0.setXRange(0, 2048)
-        self.plot_widget0.setLabel('left', 'Voltage', units='V')
-        self.plot_widget0.setLabel('bottom', 'Sample Index')
-        self.plot_widget0.showGrid(x=True, y=True)
-        self.curve0 = self.plot_widget0.plot(pen=pg.mkPen('c', width=1.5))
-        right_layout.addWidget(self.plot_widget0)
-
-        self.plot_widget = pg.PlotWidget(title="Rx 1 (GPIO 32) Received Signal")
-        self.plot_widget.getViewBox().setMouseMode(pg.ViewBox.RectMode)
-        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
-        self.plot_widget.setYRange(0, 3.3)
-        self.plot_widget.setXRange(0, 2048)
+        self.plot_widget = pg.PlotWidget(title="Rx 0 (Sum Channel) Received Signal", viewBox=CustomZoomViewBox())
+        self.plot_widget.getViewBox().setMouseEnabled(x=True, y=True)
+        self.plot_widget.getViewBox().setAspectLocked(False)
+        self.plot_widget.getViewBox().setDefaultPadding(0)
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=15.0, minXRange=0, minYRange=0)
+        self.plot_widget.setYRange(0, 13.5, padding=0)
+        self.plot_widget.setXRange(0, 2048, padding=0)
         self.plot_widget.setLabel('left', 'Voltage', units='V')
         self.plot_widget.setLabel('bottom', 'Sample Index')
         self.plot_widget.showGrid(x=True, y=True)
-        self.curve = self.plot_widget.plot(pen=pg.mkPen('y', width=1.5))
+        self.curve = self.plot_widget.plot(pen=pg.mkPen('c', width=1.5))
         right_layout.addWidget(self.plot_widget)
 
-        self.plot_widget2 = pg.PlotWidget(title="Rx 2 (GPIO 33) Received Signal")
-        self.plot_widget2.getViewBox().setMouseMode(pg.ViewBox.RectMode)
-        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=3.5)
-        self.plot_widget2.setYRange(0, 3.3)
-        self.plot_widget2.setXRange(0, 2048)
-        self.plot_widget2.setLabel('left', 'Voltage', units='V')
-        self.plot_widget2.setLabel('bottom', 'Sample Index')
-        self.plot_widget2.showGrid(x=True, y=True)
-        self.curve2 = self.plot_widget2.plot(pen=pg.mkPen('m', width=1.5))
-        right_layout.addWidget(self.plot_widget2)
+        # Lắng nghe sự kiện thay đổi vùng nhìn của biểu đồ
+        self.plot_widget.getViewBox().sigRangeChanged.connect(self._on_plot_range_changed)
+        self._is_updating_plot = False
 
         top_layout.addLayout(right_layout, stretch=1)
 
-        # SNR Labels overlaying the plot widgets
-        self.snr_label0 = QLabel("SNR: -- dB", self.plot_widget0)
+        # SNR Label overlaying the plot widget
         self.snr_label = QLabel("SNR: -- dB", self.plot_widget)
-        self.snr_label2 = QLabel("SNR: -- dB", self.plot_widget2)
-        
-        for label in [self.snr_label0, self.snr_label, self.snr_label2]:
-            label.setStyleSheet("color: #4CD964; background-color: rgba(9, 13, 22, 200); border: 1px solid rgba(0, 255, 100, 100); padding: 3px 6px; border-radius: 4px; font-family: Menlo, Monaco, 'Courier New', monospace; font-size: 11px; font-weight: bold;")
-            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            label.setFixedWidth(90)
-            label.setFixedHeight(22)
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.snr_label.setStyleSheet("color: #4CD964; background-color: rgba(9, 13, 22, 200); border: 1px solid rgba(0, 255, 100, 100); padding: 3px 6px; border-radius: 4px; font-family: Menlo, Monaco, 'Courier New', monospace; font-size: 11px; font-weight: bold;")
+        self.snr_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.snr_label.setFixedWidth(90)
+        self.snr_label.setFixedHeight(22)
+        self.snr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # 2. Thanh điều khiển phía dưới (chia làm 2 dòng để vừa với màn hình MacBook)
         ctrl_widget = QWidget()
@@ -894,7 +927,13 @@ class SonarViewer(QMainWindow):
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: #8E8E93; font-style: italic; margin-right: 15px;")
 
+        self.rx_select_combo = QComboBox()
+        self.rx_select_combo.addItems(["Rx 0 (Sum Channel)", "Rx 1 (GPIO 32)", "Rx 2 (GPIO 33)"])
+        self.rx_select_combo.activated.connect(self.change_rx_channel)
+
         # Dòng 2: Cấu hình tín hiệu và trạng thái hiển thị
+        row2_layout.addWidget(QLabel("Rx Select:"))
+        row2_layout.addWidget(self.rx_select_combo)
         row2_layout.addWidget(QLabel("Pulse Type:"))
         row2_layout.addWidget(self.pulse_type_combo)
         row2_layout.addWidget(QLabel("Signal Stream:"))
@@ -948,7 +987,10 @@ class SonarViewer(QMainWindow):
             atten_cmd = f"tx_atten:{atten_val}"
             tx_cmd = "tx:on" if self.tx_switch.isChecked() else "tx:off"
 
-            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, "servo:90", "start"]
+            rx_chan = self.rx_select_combo.currentIndex()
+            rx_select_cmd = f"rx_select:{rx_chan}"
+
+            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, rx_select_cmd, "servo:90", "start"]
 
             self.receiver = DataReceiver(host=host, initial_configs=initial_configs)
             self.receiver.pulse_type = pulse_type
@@ -1001,29 +1043,76 @@ class SonarViewer(QMainWindow):
         
         self.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd}")
 
+    def change_rx_channel(self):
+        rx_chan = self.rx_select_combo.currentIndex()
+        if rx_chan == 0:
+            title = "Rx 0 (Sum Channel) Received Signal"
+            pen_color = 'c'
+        elif rx_chan == 1:
+            title = "Rx 1 (GPIO 32) Received Signal"
+            pen_color = 'y'
+        else:
+            title = "Rx 2 (GPIO 33) Received Signal"
+            pen_color = 'm'
+            
+        self.plot_widget.setTitle(title)
+        self.curve.setPen(pg.mkPen(pen_color, width=1.5))
+        
+        # Cập nhật giới hạn đồ thị theo mode và kênh
+        idx = self.signal_type_combo.currentIndex()
+        if rx_chan == 0:
+            y_lim = 15.0
+            default_y = 13.5
+        else:
+            y_lim = 15.0 if idx == 2 else 3.5
+            default_y = 13.5 if idx == 2 else 3.3
+            
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim, minXRange=0, minYRange=0)
+        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
+        self._is_updating_plot = True
+        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+        self.plot_widget.setXRange(0, 2048, padding=0)
+        self._is_updating_plot = False
+
+        self.get_receiver().send_command(f"rx_select:{rx_chan}")
+        self.info_label.setText(f"Rx channel select command sent: rx_select:{rx_chan}")
+
+    def _on_plot_range_changed(self):
+        # Nếu sự thay đổi này KHÔNG phải do update_plot tự động gọi lệnh setYRange/setXRange
+        if not self._is_updating_plot:
+            if self.autoscale_cb.isChecked():
+                self.autoscale_cb.blockSignals(True)
+                self.autoscale_cb.setChecked(False)
+                self.autoscale_cb.blockSignals(False)
+
     def reset_zoom(self):
         idx = self.signal_type_combo.currentIndex()
-        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
-        self.current_y_max0 = 0.01 if self.autoscale_cb.isChecked() else 13.5
-        self.plot_widget0.setYRange(0, self.current_y_max0)
-        self.plot_widget0.setXRange(0, 2048)
-        self.plot_widget.setYRange(0, self.current_y_max)
-        self.plot_widget.setXRange(0, 2048)
-        self.plot_widget2.setYRange(0, self.current_y_max)
-        self.plot_widget2.setXRange(0, 2048)
+        rx_chan = self.rx_select_combo.currentIndex()
+        if rx_chan == 0:
+            default_y = 13.5
+        else:
+            default_y = 13.5 if idx == 2 else 3.3
+        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
+        self._is_updating_plot = True
+        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+        self.plot_widget.setXRange(0, 2048, padding=0)
+        self._is_updating_plot = False
         self.radar_widget.reset_zoom()
 
     def toggle_autoscale_cb(self, state):
         if self.autoscale_cb.isChecked():
             self.current_y_max = 0.01  # Set to tiny value so next frame auto-scales to current peak
-            self.current_y_max0 = 0.01
         else:
             idx = self.signal_type_combo.currentIndex()
-            self.current_y_max = 13.5 if idx == 2 else 3.3
-            self.current_y_max0 = 13.5
-        self.plot_widget0.setYRange(0, self.current_y_max0)
-        self.plot_widget.setYRange(0, self.current_y_max)
-        self.plot_widget2.setYRange(0, self.current_y_max)
+            rx_chan = self.rx_select_combo.currentIndex()
+            if rx_chan == 0:
+                default_y = 13.5
+            else:
+                default_y = 13.5 if idx == 2 else 3.3
+            self.current_y_max = default_y
+        self._is_updating_plot = True
+        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+        self._is_updating_plot = False
 
     def change_pulse_type(self):
         pulse_type = self.pulse_type_combo.currentText().lower()
@@ -1031,43 +1120,45 @@ class SonarViewer(QMainWindow):
         self.get_receiver().send_command(f"cfg:{pulse_type}")
         self.info_label.setText(f"Config sent: {pulse_type}")
         idx = self.signal_type_combo.currentIndex()
-        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else (13.5 if idx == 2 else 3.3)
-        self.current_y_max0 = 0.01 if self.autoscale_cb.isChecked() else 13.5
-        self.plot_widget0.setYRange(0, self.current_y_max0)
-        self.plot_widget.setYRange(0, self.current_y_max)
-        self.plot_widget2.setYRange(0, self.current_y_max)
+        rx_chan = self.rx_select_combo.currentIndex()
+        if rx_chan == 0:
+            default_y = 13.5
+        else:
+            default_y = 13.5 if idx == 2 else 3.3
+        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
+        self._is_updating_plot = True
+        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+        self._is_updating_plot = False
 
     def change_signal_type(self):
         idx = self.signal_type_combo.currentIndex()
-        if idx == 0:
-            mode = "raw"
-            y_lim = 3.5
-            default_y = 3.3
-        elif idx == 1:
-            mode = "demod"
-            y_lim = 3.5
-            default_y = 3.3
-        else:
-            mode = "compressed"
+        rx_chan = self.rx_select_combo.currentIndex()
+        if rx_chan == 0:
+            mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
             y_lim = 15.0
             default_y = 13.5
+        else:
+            mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
+            y_lim = 15.0 if idx == 2 else 3.5
+            default_y = 13.5 if idx == 2 else 3.3
         
-        self.plot_widget0.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=15.0)
-        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
-        self.plot_widget2.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim)
+        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=2048, yMin=-0.2, yMax=y_lim, minXRange=0, minYRange=0)
         
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
-        self.current_y_max0 = 0.01 if self.autoscale_cb.isChecked() else 13.5
         
-        self.plot_widget0.setYRange(0, self.current_y_max0)
-        self.plot_widget.setYRange(0, self.current_y_max)
-        self.plot_widget2.setYRange(0, self.current_y_max)
+        self._is_updating_plot = True
+        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+        self._is_updating_plot = False
         self.get_receiver().send_command(f"mode:{mode}")
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
     def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
         if self.is_paused:
             return
+        # Chỉ xử lý targets của kênh đang được hiển thị
+        if receiver_id != self.rx_select_combo.currentIndex():
+            return
+            
         # Extract clean angle (MSB is sweep direction)
         angle_int = int(angle)
         clean_angle = angle_int & 0x7FFF
@@ -1118,12 +1209,26 @@ class SonarViewer(QMainWindow):
     def update_plot(self, samples, angle, receiver_id=0):
         if self.is_paused:
             return
+            
+        # Chỉ xử lý vẽ biểu đồ nếu nhận đúng dữ liệu của kênh đang được lựa chọn
+        if receiver_id != self.rx_select_combo.currentIndex():
+            if receiver_id == 0:
+                # Update radar sweep from Sum channel even if not displaying plot
+                if len(samples) > 0:
+                    voltages = (samples / 32767.0) * 13.2
+                    pulse_type = self.pulse_type_combo.currentText().lower()
+                    filter_len = 104 if pulse_type == 'barker13' else 8
+                    shifted_voltages = np.zeros_like(voltages)
+                    shifted_voltages[:-filter_len] = voltages[filter_len:]
+                    shifted_voltages[-filter_len:] = np.median(voltages)
+                    self.radar_widget.set_data(angle, shifted_voltages)
+            return
+
         if len(samples) > 0:
             # Convert raw Q15 samples to voltages in the main GUI thread
             if receiver_id == 0:
                 # Rx0 is 8-pulse accumulated Sum (Q15 max 32767 -> 13.2V max scale)
                 voltages = (samples / 32767.0) * 13.2
-
             else:
                 stream_idx = self.signal_type_combo.currentIndex()
                 if stream_idx == 0:  # Raw
@@ -1198,13 +1303,8 @@ class SonarViewer(QMainWindow):
             else:
                 snr_str = "SNR: -- dB"
 
-            # Update corresponding SNR label
-            if receiver_id == 0:
-                self.snr_label0.setText(snr_str)
-            elif receiver_id == 1:
-                self.snr_label.setText(snr_str)
-            elif receiver_id == 2:
-                self.snr_label2.setText(snr_str)
+            # Update SNR label
+            self.snr_label.setText(snr_str)
             
             # Shift voltages to align radar history with the target distance (correcting for filter delay)
             pulse_type = self.pulse_type_combo.currentText().lower()
@@ -1216,12 +1316,12 @@ class SonarViewer(QMainWindow):
             
             if receiver_id == 0:
                 self.radar_widget.set_data(angle, shifted_voltages)
-                self.curve0.setData(voltages)
+                self.curve.setData(voltages)
             elif receiver_id == 1:
                 self.radar_widget.set_angle(angle)
                 self.curve.setData(voltages)
             elif receiver_id == 2:
-                self.curve2.setData(voltages)
+                self.curve.setData(voltages)
             
             # Peak Hold Auto Scale (keeps Y-axis fit to the maximum peak value)
             if self.autoscale_cb.isChecked() and len(voltages) > 120:
@@ -1230,19 +1330,13 @@ class SonarViewer(QMainWindow):
                 if len(valid_samples) > 0:
                     peak = np.max(valid_samples)
                     if np.isfinite(peak):
-                        if receiver_id == 0:
-                            # Rx0 is always Compressed Sum (capped at 13.5)
-                            target_y_max0 = min(max(peak * 1.15, 0.01), 13.5)
-                            if target_y_max0 > self.current_y_max0:
-                                self.current_y_max0 = target_y_max0
-                                self.plot_widget0.setYRange(0, self.current_y_max0)
-                        else:
-                            max_cap = 13.5 if self.signal_type_combo.currentIndex() == 2 else 3.3
-                            target_y_max = min(max(peak * 1.15, 0.01), max_cap)
-                            if target_y_max > self.current_y_max:
-                                self.current_y_max = target_y_max
-                                self.plot_widget.setYRange(0, self.current_y_max)
-                                self.plot_widget2.setYRange(0, self.current_y_max)
+                        max_cap = 13.5 if (receiver_id == 0 or self.signal_type_combo.currentIndex() == 2) else 3.3
+                        target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                        if target_y_max > self.current_y_max:
+                            self.current_y_max = target_y_max
+                            self._is_updating_plot = True
+                            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                            self._is_updating_plot = False
             
             if self.is_single_shot:
                 self.get_receiver().send_command("stop")
@@ -1258,14 +1352,9 @@ class SonarViewer(QMainWindow):
         self.reposition_snr_labels()
 
     def reposition_snr_labels(self):
-        if not hasattr(self, 'snr_label0') or not hasattr(self, 'snr_label') or not hasattr(self, 'snr_label2'):
+        if not hasattr(self, 'snr_label') or not self.plot_widget:
             return
-        for label, plot in [(self.snr_label0, self.plot_widget0), 
-                             (self.snr_label, self.plot_widget), 
-                             (self.snr_label2, self.plot_widget2)]:
-            if label and plot:
-                # Position in top right corner of the plot widget, offset from the right boundary to avoid scrollbar/axes
-                label.move(plot.width() - 100, 10)
+        self.snr_label.move(self.plot_widget.width() - 100, 10)
 
     def closeEvent(self, event):
         if self.receiver:
