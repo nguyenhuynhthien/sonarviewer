@@ -1,4 +1,6 @@
 import sys
+import os
+import json
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel
@@ -74,6 +76,7 @@ class SonarViewer(QMainWindow):
 
         # 2. Thanh điều khiển phía dưới
         self.control_panel = ControlPanel()
+        self.load_settings()
         main_layout.addWidget(self.control_panel, stretch=1)
 
         # Kết nối các tín hiệu từ ControlPanel
@@ -406,7 +409,33 @@ class SonarViewer(QMainWindow):
         self.snr_label.move(self.plot_widget.width() - 100, 10)
 
     def closeEvent(self, event):
+        self.save_settings()
         if self.receiver:
             self.receiver.stop()
             self.receiver.wait()
         event.accept()
+
+    def get_settings_filepath(self):
+        # Lưu file settings.json tại thư mục chứa main.py (SonarViewer)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, "settings.json")
+
+    def load_settings(self):
+        filepath = self.get_settings_filepath()
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                    self.control_panel.set_settings(settings)
+            except Exception as e:
+                print(f"Error loading settings: {e}")
+
+    def save_settings(self):
+        filepath = self.get_settings_filepath()
+        try:
+            settings = self.control_panel.get_settings()
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+

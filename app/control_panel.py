@@ -169,3 +169,27 @@ class ControlPanel(QWidget):
 
     def _on_tx_clicked(self):
         self.tx_toggled.emit(self.tx_switch.isChecked())
+
+    def get_settings(self):
+        return {
+            "pulse_type": self.pulse_type_combo.currentText(),
+            "signal_type": self.signal_type_combo.currentIndex(),
+            "tx_atten": self.tx_atten_combo.currentText(),
+            "rx_channel": self.rx_select_combo.currentIndex()
+        }
+
+    def set_settings(self, settings):
+        if "pulse_type" in settings:
+            idx = self.pulse_type_combo.findText(settings["pulse_type"])
+            if idx >= 0:
+                self.pulse_type_combo.setCurrentIndex(idx)
+        if "signal_type" in settings:
+            self.signal_type_combo.setCurrentIndex(settings["signal_type"])
+        if "tx_atten" in settings:
+            idx = self.tx_atten_combo.findText(settings["tx_atten"])
+            if idx >= 0:
+                self.tx_atten_combo.setCurrentIndex(idx)
+        if "rx_channel" in settings:
+            self.rx_select_combo.setCurrentIndex(settings["rx_channel"])
+
+
