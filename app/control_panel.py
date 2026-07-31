@@ -56,7 +56,7 @@ class ControlPanel(QWidget):
         self.signal_type_combo.activated.connect(self.signal_type_changed.emit)
 
         self.tx_atten_combo = QComboBox()
-        self.tx_atten_combo.addItems(["0 dB", "-6 dB", "-12 dB", "-18 dB", "-24 dB", "Mute"])
+        self.tx_atten_combo.addItems(["0 dB", "-1 dB", "-1.5 dB", "-2 dB", "-2.5 dB", "-3 dB", "-4 dB", "-6 dB", "-12 dB", "-18 dB", "-24 dB", "Mute"])
         self.tx_atten_combo.activated.connect(self._on_tx_atten_activated)
 
         self.rx_select_combo = QComboBox()
