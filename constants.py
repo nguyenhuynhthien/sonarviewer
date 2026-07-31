@@ -1,0 +1,99 @@
+# Constants for SonarViewer
+
+import numpy as np
+
+# --- Network Settings ---
+DEFAULT_HOST = "esp32.local"
+DEFAULT_PORT = 8080
+SOCKET_TIMEOUT = 2.0
+SOCKET_RECV_BUFFER = 65536
+
+# --- UDP Frame & Chunk Structure ---
+CHUNK_HEADER_SIZE = 4
+CHUNK_SAMPLES = 512
+CHUNKS_PER_FRAME = 4
+CHUNK_PACKET_SIZE = CHUNK_HEADER_SIZE + (CHUNK_SAMPLES * 2)  # 2 bytes per sample (int16)
+
+# --- Physical & Signal Processing Parameters ---
+SPEED_OF_SOUND = 343.0  # m/s
+FS = 160000.0           # Hz (160 kHz)
+MAX_SAMPLES = 2048
+# Derived Max Range: (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS) -> ~1.0976m
+MAX_RANGE = (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS)
+
+# Filter lengths (in samples) to correct for filter group delays
+FILTER_LEN_BARKER13 = 104
+FILTER_LEN_SINGLE = 8
+
+# CFAR & SNR parameters
+ACTIVE_SIGNAL_START_IDX = 120
+SMOOTHING_WINDOW_SIZE = 5
+CFAR_CUT_SIZE = 7
+CFAR_GUARD_SIZE_BARKER13 = 52
+CFAR_GUARD_SIZE_SINGLE = 16
+
+# SNR calibration biases
+BIAS_COMPRESSED = 8.0
+BIAS_RAW_DEMOD = 6.2
+
+# Min/Max target strength bounds for color scaling (in dBV)
+DEFAULT_MIN_STRENGTH = -50.0
+DEFAULT_MAX_STRENGTH = 10.0
+
+# Downsampling
+DOWNSAMPLE_FACTOR = 16
+# Derived number of downsampled bins (e.g. 2048 / 16 = 128 bins)
+DOWNSAMPLED_BINS = MAX_SAMPLES // DOWNSAMPLE_FACTOR
+
+# Voltage conversion scaling factors
+VOLTAGE_SCALE_RX0 = 13.2
+VOLTAGE_SCALE_RX_RAW_OFFSET = 1.65
+VOLTAGE_SCALE_RX_RAW_MULT = 1.65
+VOLTAGE_SCALE_RX_DEMOD_MULT = 3.3
+VOLTAGE_SCALE_RX_COMPRESSED_MULT = 3.3
+VOLTAGE_CLIP_RX_COMPRESSED = 13.2
+
+Q15_MAX_VAL_RX0 = 32767.0
+Q15_MAX_VAL_RX12 = 32768.0
+COMPRESSED_MAX_VAL = 8192.0
+
+# --- Radar UI Design Constants ---
+INTERPOLATION_INTERVAL_MS = 16  # ~60 FPS
+DECAY_RATE = 0.96
+MIN_VISIBILITY_THRESHOLD = 0.02
+RADAR_BG_COLOR = "#090d16"
+RADAR_TEXT_GREEN = "#00FF64"
+
+# Jet/Rainbow gradient stops for target strength color mapping: (normalized_strength, (R, G, B))
+TARGET_COLOR_STOPS = [
+    (0.0, (10, 30, 180)),   # Blue (Weak)
+    (0.25, (0, 200, 200)),  # Cyan
+    (0.5, (0, 220, 50)),    # Green
+    (0.75, (255, 200, 0)),  # Yellow
+    (1.0, (255, 30, 30))    # Red (Strong)
+]
+
+# Radar Grid Layout
+RADAR_CONCENTRIC_RINGS = 4
+RADAR_GRID_ANGLES = [30, 60, 90, 120, 150]
+RADAR_LABEL_ANGLES = [0, 30, 60, 90, 120, 150, 180]
+RADAR_SECTOR_STEP_HALF = 1.5  # half of 3-degree step
+RADAR_SWEEP_TRAIL_SLICES = 120
+RADAR_SWEEP_TRAIL_SLICE_WIDTH = 0.25  # degrees
+RADAR_SWEEP_MAX_ALPHA = 130
+
+# Cluster settings
+CLUSTER_ANGLE_THRESHOLD_DEG = 15.0
+CLUSTER_RANGE_THRESHOLD_M = 0.25
+CLUSTER_MIN_ANGLE_SIZE_DEG = 4.0
+CLUSTER_MIN_RANGE_SIZE_M = 0.05
+
+# --- Plot UI Limits ---
+PLOT_Y_MIN = -0.2
+PLOT_Y_MAX_RX0 = 15.0
+PLOT_Y_MAX_RX12_RAW_DEMOD = 3.5
+PLOT_Y_MAX_RX12_COMPRESSED = 15.0
+
+PLOT_DEFAULT_Y_MAX_RX0 = 13.5
+PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD = 3.3
+PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED = 13.5
