@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLineEdit, QLabel, QCheckBox, QComboBox
+from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel
 from PyQt6.QtCore import Qt
 
 from constants import (
@@ -11,8 +11,8 @@ from constants import (
     ACTIVE_SIGNAL_START_IDX
 )
 from app.custom_zoom_viewbox import CustomZoomViewBox
-from app.toggle_switch import ToggleSwitch
 from app.radar_widget import RadarWidget
+from app.control_panel import ControlPanel
 from service.data_receiver import DataReceiver
 from service.signal_processor import convert_samples_to_voltages, calculate_snr, shift_voltages
 
@@ -73,146 +73,50 @@ class SonarViewer(QMainWindow):
         self.snr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # 2. Thanh điều khiển phía dưới
-        ctrl_widget = QWidget()
-        ctrl_layout = QVBoxLayout(ctrl_widget)
-        ctrl_layout.setContentsMargins(10, 5, 10, 5)
-        ctrl_layout.setSpacing(6)
+        self.control_panel = ControlPanel()
+        main_layout.addWidget(self.control_panel, stretch=1)
 
-        row1_layout = QHBoxLayout()
-        row1_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        row2_layout = QHBoxLayout()
-        row2_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-        self.ip_input = QLineEdit(DEFAULT_HOST)
-        self.ip_input.setFixedWidth(120)
-        self.pause_btn = QPushButton("Pause")
-        self.pause_btn.clicked.connect(self.toggle_pause)
-        
-        self.single_btn = QPushButton("Single Shot")
-        self.single_btn.clicked.connect(self.request_single)
-        
-        self.status_label = QLabel()
-        self.update_status("Disconnected")
-
-        self.pulse_type_combo = QComboBox()
-        self.pulse_type_combo.addItems(["Single", "Barker13"])
-        self.pulse_type_combo.activated.connect(self.change_pulse_type)
-
-        self.signal_type_combo = QComboBox()
-        self.signal_type_combo.addItems(["Raw", "Demodulated", "Compressed"])
-        self.signal_type_combo.activated.connect(self.change_signal_type)
-
-        self.tx_atten_combo = QComboBox()
-        self.tx_atten_combo.addItems(["0 dB", "-6 dB", "-12 dB", "-18 dB", "-24 dB", "Mute"])
-        self.tx_atten_combo.activated.connect(self.change_tx_attenuation)
-
-        self.autoscale_cb = QCheckBox("Auto Scale")
-        self.autoscale_cb.setChecked(True)
-        self.autoscale_cb.stateChanged.connect(self.toggle_autoscale_cb)
-
-        self.reset_zoom_btn = QPushButton("Reset Zoom")
-        self.reset_zoom_btn.clicked.connect(self.reset_zoom)
-
-        self.servo_switch = ToggleSwitch()
-        self.servo_switch.clicked.connect(self.toggle_servo)
-
-        self.tx_switch = ToggleSwitch()
-        self.tx_switch.clicked.connect(self.toggle_tx)
-
-        # Group Tx On label and switch closer in a QWidget
-        tx_widget = QWidget()
-        tx_layout = QHBoxLayout(tx_widget)
-        tx_layout.setSpacing(5)
-        tx_layout.setContentsMargins(0, 0, 0, 0)
-        tx_layout.addWidget(QLabel("Tx On:"))
-        tx_layout.addWidget(self.tx_switch)
-        tx_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-        # Group Servo label and switch closer in a QWidget
-        servo_widget = QWidget()
-        servo_layout = QHBoxLayout(servo_widget)
-        servo_layout.setSpacing(5)
-        servo_layout.setContentsMargins(0, 0, 0, 0)
-        servo_layout.addWidget(QLabel("Run Servo:"))
-        servo_layout.addWidget(self.servo_switch)
-        servo_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-        # Dòng 1: Cấu hình kết nối và điều khiển
-        row1_layout.addWidget(QLabel("ESP32 IP:"))
-        row1_layout.addWidget(self.ip_input)
-        row1_layout.addWidget(self.pause_btn)
-        row1_layout.addWidget(self.single_btn)
-        row1_layout.addWidget(self.autoscale_cb)
-        row1_layout.addWidget(self.reset_zoom_btn)
-        row1_layout.addSpacing(15)
-        row1_layout.addWidget(tx_widget)
-        row1_layout.addSpacing(15)
-        row1_layout.addWidget(servo_widget)
-        
-        self.info_label = QLabel("")
-        self.info_label.setStyleSheet("color: #8E8E93; font-style: italic; margin-right: 15px;")
-
-        self.rx_select_combo = QComboBox()
-        self.rx_select_combo.addItems(["Rx 0 (Sum Channel)", "Rx 1 (GPIO 32)", "Rx 2 (GPIO 33)"])
-        self.rx_select_combo.activated.connect(self.change_rx_channel)
-
-        # Dòng 2: Cấu hình tín hiệu và trạng thái hiển thị
-        row2_layout.addWidget(QLabel("Rx Select:"))
-        row2_layout.addWidget(self.rx_select_combo)
-        row2_layout.addWidget(QLabel("Pulse Type:"))
-        row2_layout.addWidget(self.pulse_type_combo)
-        row2_layout.addWidget(QLabel("Signal Stream:"))
-        row2_layout.addWidget(self.signal_type_combo)
-        row2_layout.addWidget(QLabel("Tx Attenuation:"))
-        row2_layout.addWidget(self.tx_atten_combo)
-        row2_layout.addStretch()
-        row2_layout.addWidget(self.info_label)
-        row2_layout.addWidget(self.status_label)
-
-        ctrl_layout.addLayout(row1_layout)
-        ctrl_layout.addLayout(row2_layout)
-        
-        main_layout.addWidget(ctrl_widget, stretch=1)
+        # Kết nối các tín hiệu từ ControlPanel
+        self.control_panel.ip_changed.connect(self._on_ip_changed)
+        self.control_panel.pause_toggled.connect(self.toggle_pause)
+        self.control_panel.single_shot_clicked.connect(self.request_single)
+        self.control_panel.pulse_type_changed.connect(self.change_pulse_type)
+        self.control_panel.signal_type_changed.connect(self.change_signal_type)
+        self.control_panel.tx_atten_changed.connect(self.change_tx_attenuation)
+        self.control_panel.rx_channel_changed.connect(self.change_rx_channel)
+        self.control_panel.autoscale_toggled.connect(self.toggle_autoscale_cb)
+        self.control_panel.reset_zoom_clicked.connect(self.reset_zoom)
+        self.control_panel.servo_toggled.connect(self.toggle_servo)
+        self.control_panel.tx_toggled.connect(self.toggle_tx)
 
         self.receiver = None
         self.is_streaming = True
         self.is_paused = False
         self.is_single_shot = False
 
-        # Start continuous receiver thread on startup
+        # Khởi động Receiver
         self.get_receiver()
 
-    def update_status(self, status):
-        if status.startswith("Connected"):
-            self.status_label.setText("<span style='color: #4CD964; font-size: 16px;'>●</span> Connected")
-            self.status_label.setToolTip(status)
-        elif status.startswith("Disconnected"):
-            self.status_label.setText("<span style='color: #FF3B30; font-size: 16px;'>●</span> Disconnected")
-            self.status_label.setToolTip("")
-        else:
-            self.status_label.setText(f"<span style='color: #FF9500; font-size: 16px;'>●</span> {status}")
-            self.status_label.setToolTip(status)
-
     def get_receiver(self):
-        host = self.ip_input.text()
+        host = self.control_panel.ip_input.text()
         if not self.receiver or self.receiver.host != host or not self.receiver.isRunning():
             if self.receiver:
                 self.receiver.stop()
                 self.receiver.wait()
             
-            # Gather current UI configs to send immediately on connection
-            pulse_type = self.pulse_type_combo.currentText().lower()
-            idx = self.signal_type_combo.currentIndex()
+            # Đọc các thông số UI hiện tại để gửi khi kết nối
+            pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
+            idx = self.control_panel.signal_type_combo.currentIndex()
             mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
-            servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
-            self.radar_widget.servo_enabled = self.servo_switch.isChecked()
+            servo_cmd = "servo:on" if self.control_panel.servo_switch.isChecked() else "servo:off"
+            self.radar_widget.servo_enabled = self.control_panel.servo_switch.isChecked()
             
-            txt = self.tx_atten_combo.currentText()
+            txt = self.control_panel.tx_atten_combo.currentText()
             atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
             atten_cmd = f"tx_atten:{atten_val}"
-            tx_cmd = "tx:on" if self.tx_switch.isChecked() else "tx:off"
+            tx_cmd = "tx:on" if self.control_panel.tx_switch.isChecked() else "tx:off"
 
-            rx_chan = self.rx_select_combo.currentIndex()
+            rx_chan = self.control_panel.rx_select_combo.currentIndex()
             rx_select_cmd = f"rx_select:{rx_chan}"
 
             initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, rx_select_cmd, "servo:90", "start"]
@@ -221,55 +125,58 @@ class SonarViewer(QMainWindow):
             self.receiver.pulse_type = pulse_type
             self.receiver.data_received.connect(self.update_plot)
             self.receiver.target_received.connect(self.update_target)
-            self.receiver.status_changed.connect(self.update_status)
+            self.receiver.status_changed.connect(self._on_status_changed)
             self.receiver.start()
         return self.receiver
 
+    def _on_ip_changed(self, host):
+        self.get_receiver()
+
+    def _on_status_changed(self, status):
+        self.control_panel.update_status(status)
+
     def send_servo_angle(self, angle):
-        if not self.servo_switch.isChecked():
+        if not self.control_panel.servo_switch.isChecked():
             self.get_receiver().send_command(f"servo:{angle}")
 
-    def change_tx_attenuation(self):
-        txt = self.tx_atten_combo.currentText()
+    def change_tx_attenuation(self, txt):
         atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
         cmd = f"tx_atten:{atten_val}"
         self.get_receiver().send_command(cmd)
-        self.info_label.setText(f"Tx attenuation command sent: {cmd}")
+        self.control_panel.info_label.setText(f"Tx attenuation command sent: {cmd}")
 
-    def toggle_tx(self):
-        state = self.tx_switch.isChecked()
+    def toggle_tx(self, state):
         cmd = "tx:on" if state else "tx:off"
         self.get_receiver().send_command(cmd)
-        self.info_label.setText(f"Tx switch command sent: {cmd}")
+        self.control_panel.info_label.setText(f"Tx switch command sent: {cmd}")
 
     def send_all_configs(self):
         # 1. Pulse Type
-        pulse_type = self.pulse_type_combo.currentText().lower()
+        pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
         self.get_receiver().pulse_type = pulse_type
         self.get_receiver().send_command(f"cfg:{pulse_type}")
         
         # 2. Signal Stream
-        idx = self.signal_type_combo.currentIndex()
+        idx = self.control_panel.signal_type_combo.currentIndex()
         mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
         self.get_receiver().send_command(f"mode:{mode}")
         
         # 3. Servo State
-        servo_cmd = "servo:on" if self.servo_switch.isChecked() else "servo:off"
+        servo_cmd = "servo:on" if self.control_panel.servo_switch.isChecked() else "servo:off"
         self.get_receiver().send_command(servo_cmd)
         
         # 4. Tx Attenuation
-        txt = self.tx_atten_combo.currentText()
+        txt = self.control_panel.tx_atten_combo.currentText()
         atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
         self.get_receiver().send_command(f"tx_atten:{atten_val}")
         
         # 5. Tx Switch State
-        tx_cmd = "tx:on" if self.tx_switch.isChecked() else "tx:off"
+        tx_cmd = "tx:on" if self.control_panel.tx_switch.isChecked() else "tx:off"
         self.get_receiver().send_command(tx_cmd)
         
-        self.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd}")
+        self.control_panel.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd}")
 
-    def change_rx_channel(self):
-        rx_chan = self.rx_select_combo.currentIndex()
+    def change_rx_channel(self, rx_chan):
         if rx_chan == 0:
             title = "Rx 0 (Sum Channel) Received Signal"
             pen_color = 'c'
@@ -283,7 +190,7 @@ class SonarViewer(QMainWindow):
         self.plot_widget.setTitle(title)
         self.curve.setPen(pg.mkPen(pen_color, width=1.5))
         
-        idx = self.signal_type_combo.currentIndex()
+        idx = self.control_panel.signal_type_combo.currentIndex()
         if rx_chan == 0:
             y_lim = PLOT_Y_MAX_RX0
             default_y = PLOT_DEFAULT_Y_MAX_RX0
@@ -292,43 +199,43 @@ class SonarViewer(QMainWindow):
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
             
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
-        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
-        if self.autoscale_cb.isChecked():
+        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
+        if self.control_panel.autoscale_cb.isChecked():
             self._is_updating_plot = True
             self.plot_widget.setYRange(0, self.current_y_max, padding=0)
             self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
             self._is_updating_plot = False
 
         self.get_receiver().send_command(f"rx_select:{rx_chan}")
-        self.info_label.setText(f"Rx channel select command sent: rx_select:{rx_chan}")
+        self.control_panel.info_label.setText(f"Rx channel select command sent: rx_select:{rx_chan}")
 
     def _on_plot_range_changed(self):
         if not self._is_updating_plot:
-            if self.autoscale_cb.isChecked():
-                self.autoscale_cb.blockSignals(True)
-                self.autoscale_cb.setChecked(False)
-                self.autoscale_cb.blockSignals(False)
+            if self.control_panel.autoscale_cb.isChecked():
+                self.control_panel.autoscale_cb.blockSignals(True)
+                self.control_panel.autoscale_cb.setChecked(False)
+                self.control_panel.autoscale_cb.blockSignals(False)
 
     def reset_zoom(self):
-        idx = self.signal_type_combo.currentIndex()
-        rx_chan = self.rx_select_combo.currentIndex()
+        idx = self.control_panel.signal_type_combo.currentIndex()
+        rx_chan = self.control_panel.rx_select_combo.currentIndex()
         if rx_chan == 0:
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
+        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
         self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
         self._is_updating_plot = False
         self.radar_widget.reset_zoom()
 
-    def toggle_autoscale_cb(self, state):
-        if self.autoscale_cb.isChecked():
+    def toggle_autoscale_cb(self, checked):
+        if checked:
             self.current_y_max = 0.01
         else:
-            idx = self.signal_type_combo.currentIndex()
-            rx_chan = self.rx_select_combo.currentIndex()
+            idx = self.control_panel.signal_type_combo.currentIndex()
+            rx_chan = self.control_panel.rx_select_combo.currentIndex()
             if rx_chan == 0:
                 default_y = PLOT_DEFAULT_Y_MAX_RX0
             else:
@@ -338,26 +245,25 @@ class SonarViewer(QMainWindow):
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
         self._is_updating_plot = False
 
-    def change_pulse_type(self):
-        pulse_type = self.pulse_type_combo.currentText().lower()
+    def change_pulse_type(self, pulse_type_text):
+        pulse_type = pulse_type_text.lower()
         self.get_receiver().pulse_type = pulse_type
         self.get_receiver().send_command(f"cfg:{pulse_type}")
-        self.info_label.setText(f"Config sent: {pulse_type}")
-        idx = self.signal_type_combo.currentIndex()
-        rx_chan = self.rx_select_combo.currentIndex()
+        self.control_panel.info_label.setText(f"Config sent: {pulse_type}")
+        idx = self.control_panel.signal_type_combo.currentIndex()
+        rx_chan = self.control_panel.rx_select_combo.currentIndex()
         if rx_chan == 0:
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
-        if self.autoscale_cb.isChecked():
+        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
+        if self.control_panel.autoscale_cb.isChecked():
             self._is_updating_plot = True
             self.plot_widget.setYRange(0, self.current_y_max, padding=0)
             self._is_updating_plot = False
 
-    def change_signal_type(self):
-        idx = self.signal_type_combo.currentIndex()
-        rx_chan = self.rx_select_combo.currentIndex()
+    def change_signal_type(self, idx):
+        rx_chan = self.control_panel.rx_select_combo.currentIndex()
         if rx_chan == 0:
             mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
             y_lim = PLOT_Y_MAX_RX0
@@ -368,19 +274,19 @@ class SonarViewer(QMainWindow):
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
         
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
-        self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
+        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
         
-        if self.autoscale_cb.isChecked():
+        if self.control_panel.autoscale_cb.isChecked():
             self._is_updating_plot = True
             self.plot_widget.setYRange(0, self.current_y_max, padding=0)
             self._is_updating_plot = False
         self.get_receiver().send_command(f"mode:{mode}")
-        self.info_label.setText(f"Mode command sent: mode:{mode}")
+        self.control_panel.info_label.setText(f"Mode command sent: mode:{mode}")
 
     def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
         if self.is_paused:
             return
-        if receiver_id != self.rx_select_combo.currentIndex():
+        if receiver_id != self.control_panel.rx_select_combo.currentIndex():
             return
             
         angle_int = int(angle)
@@ -397,58 +303,54 @@ class SonarViewer(QMainWindow):
 
         self.radar_widget.add_target(range_val, clean_angle, strength, disp_velocity)
         if receiver_id == 0:
-            self.info_label.setText(f"Sum Channel Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+            self.control_panel.info_label.setText(f"Sum Channel Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
         else:
-            self.info_label.setText(f"Rx {receiver_id} Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+            self.control_panel.info_label.setText(f"Rx {receiver_id} Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
 
-    def toggle_servo(self, checked=None):
-        state = self.servo_switch.isChecked()
+    def toggle_servo(self, state):
         self.radar_widget.servo_enabled = state
         cmd = "servo:on" if state else "servo:off"
         self.get_receiver().send_command(cmd)
-        self.info_label.setText(f"Servo command sent: {cmd}")
+        self.control_panel.info_label.setText(f"Servo command sent: {cmd}")
 
     def request_single(self):
         self.is_single_shot = True
         self.get_receiver().send_command("start")
         self.is_streaming = True
         self.is_paused = False
-        self.pause_btn.setText("Pause")
+        self.control_panel.set_paused_state(False)
 
-    def toggle_pause(self):
+    def toggle_pause(self, paused):
         receiver = self.get_receiver()
-        if not self.is_paused:
+        self.is_paused = paused
+        if paused:
             receiver.send_command("stop")
-            self.is_paused = True
-            self.pause_btn.setText("Resume")
-            self.info_label.setText("Streaming paused.")
+            self.control_panel.info_label.setText("Streaming paused.")
         else:
-            self.is_paused = False
             receiver.send_command("start")
-            self.pause_btn.setText("Pause")
-            self.info_label.setText("Streaming resumed.")
+            self.control_panel.info_label.setText("Streaming resumed.")
 
     def update_plot(self, samples, angle, receiver_id=0):
         if self.is_paused:
             return
             
-        # If this is Rx0, we update radar history sweep from Sum channel even if not displaying plot
-        if receiver_id != self.rx_select_combo.currentIndex():
+        # Update radar history sweep from Sum channel even if not displaying plot
+        if receiver_id != self.control_panel.rx_select_combo.currentIndex():
             if receiver_id == 0 and len(samples) > 0:
-                voltages = convert_samples_to_voltages(samples, receiver_id, self.signal_type_combo.currentIndex())
-                pulse_type = self.pulse_type_combo.currentText().lower()
+                voltages = convert_samples_to_voltages(samples, receiver_id, self.control_panel.signal_type_combo.currentIndex())
+                pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
                 shifted_voltages = shift_voltages(voltages, pulse_type)
                 self.radar_widget.set_data(angle, shifted_voltages)
             return
 
         if len(samples) > 0:
-            stream_idx = self.signal_type_combo.currentIndex()
+            stream_idx = self.control_panel.signal_type_combo.currentIndex()
             voltages = convert_samples_to_voltages(samples, receiver_id, stream_idx)
             self.latest_voltages = voltages
 
             # Calculate SNR
-            pulse_type = self.pulse_type_combo.currentText().lower()
-            tx_on = self.tx_switch.isChecked()
+            pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
+            tx_on = self.control_panel.tx_switch.isChecked()
             calibrated_snr = calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx)
             
             if calibrated_snr is not None and calibrated_snr > 1.0:
@@ -471,7 +373,7 @@ class SonarViewer(QMainWindow):
                 self.curve.setData(voltages)
             
             # Peak Hold Auto Scale
-            if self.autoscale_cb.isChecked() and len(voltages) > ACTIVE_SIGNAL_START_IDX:
+            if self.control_panel.autoscale_cb.isChecked() and len(voltages) > ACTIVE_SIGNAL_START_IDX:
                 active_voltages = voltages[ACTIVE_SIGNAL_START_IDX:]
                 valid_samples = active_voltages[np.isfinite(active_voltages)]
                 if len(valid_samples) > 0:
@@ -490,7 +392,7 @@ class SonarViewer(QMainWindow):
                 self.is_streaming = False
                 self.is_single_shot = False
                 self.is_paused = True
-                self.pause_btn.setText("Resume")
+                self.control_panel.set_paused_state(True)
         else:
             self.radar_widget.set_angle(angle)
 
