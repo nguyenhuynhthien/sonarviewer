@@ -293,10 +293,11 @@ class SonarViewer(QMainWindow):
             
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
-        self._is_updating_plot = True
-        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-        self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
-        self._is_updating_plot = False
+        if self.autoscale_cb.isChecked():
+            self._is_updating_plot = True
+            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+            self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
+            self._is_updating_plot = False
 
         self.get_receiver().send_command(f"rx_select:{rx_chan}")
         self.info_label.setText(f"Rx channel select command sent: rx_select:{rx_chan}")
@@ -349,9 +350,10 @@ class SonarViewer(QMainWindow):
         else:
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
-        self._is_updating_plot = True
-        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-        self._is_updating_plot = False
+        if self.autoscale_cb.isChecked():
+            self._is_updating_plot = True
+            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+            self._is_updating_plot = False
 
     def change_signal_type(self):
         idx = self.signal_type_combo.currentIndex()
@@ -368,9 +370,10 @@ class SonarViewer(QMainWindow):
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
         self.current_y_max = 0.01 if self.autoscale_cb.isChecked() else default_y
         
-        self._is_updating_plot = True
-        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-        self._is_updating_plot = False
+        if self.autoscale_cb.isChecked():
+            self._is_updating_plot = True
+            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+            self._is_updating_plot = False
         self.get_receiver().send_command(f"mode:{mode}")
         self.info_label.setText(f"Mode command sent: mode:{mode}")
 
