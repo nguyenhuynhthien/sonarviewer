@@ -15,6 +15,9 @@ class ControlPanel(QWidget):
     tx_toggled = pyqtSignal(bool)
     rx_channel_changed = pyqtSignal(int)
     ip_changed = pyqtSignal(str)
+    capture_clicked = pyqtSignal()
+    capture_prev_clicked = pyqtSignal()
+    capture_next_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,6 +75,24 @@ class ControlPanel(QWidget):
         self.reset_zoom_btn = QPushButton("Reset Zoom")
         self.reset_zoom_btn.clicked.connect(self.reset_zoom_clicked.emit)
 
+        # Capture Button & Navigation
+        self.capture_btn = QPushButton("Capture")
+        self.capture_btn.clicked.connect(self.capture_clicked.emit)
+
+        self.capture_prev_btn = QPushButton("◀")
+        self.capture_prev_btn.setFixedWidth(30)
+        self.capture_prev_btn.clicked.connect(self.capture_prev_clicked.emit)
+        self.capture_prev_btn.setVisible(False)
+
+        self.capture_label = QLabel("")
+        self.capture_label.setStyleSheet("color: #FF9500; font-weight: bold; margin-left: 5px; margin-right: 5px;")
+        self.capture_label.setVisible(False)
+
+        self.capture_next_btn = QPushButton("▶")
+        self.capture_next_btn.setFixedWidth(30)
+        self.capture_next_btn.clicked.connect(self.capture_next_clicked.emit)
+        self.capture_next_btn.setVisible(False)
+
         # Switches
         self.servo_switch = ToggleSwitch()
         self.servo_switch.clicked.connect(self._on_servo_clicked)
@@ -104,6 +125,10 @@ class ControlPanel(QWidget):
         row1_layout.addWidget(self.single_btn)
         row1_layout.addWidget(self.autoscale_cb)
         row1_layout.addWidget(self.reset_zoom_btn)
+        row1_layout.addWidget(self.capture_btn)
+        row1_layout.addWidget(self.capture_prev_btn)
+        row1_layout.addWidget(self.capture_label)
+        row1_layout.addWidget(self.capture_next_btn)
         row1_layout.addSpacing(15)
         row1_layout.addWidget(tx_widget)
         row1_layout.addSpacing(15)
@@ -191,5 +216,25 @@ class ControlPanel(QWidget):
                 self.tx_atten_combo.setCurrentIndex(idx)
         if "rx_channel" in settings:
             self.rx_select_combo.setCurrentIndex(settings["rx_channel"])
+
+    def set_capture_idle(self):
+        self.capture_btn.setText("Capture")
+        self.capture_prev_btn.setVisible(False)
+        self.capture_next_btn.setVisible(False)
+        self.capture_label.setVisible(False)
+
+    def set_capturing_status(self, current, total=10):
+        self.capture_btn.setText("Exit Capture")
+        self.capture_prev_btn.setVisible(False)
+        self.capture_next_btn.setVisible(False)
+        self.capture_label.setText(f"Capturing ({current}/{total})")
+        self.capture_label.setVisible(True)
+
+    def set_capture_browse(self, current, total=10):
+        self.capture_btn.setText("Exit Capture")
+        self.capture_prev_btn.setVisible(True)
+        self.capture_next_btn.setVisible(True)
+        self.capture_label.setText(f"Pulse {current}/{total}")
+        self.capture_label.setVisible(True)
 
 

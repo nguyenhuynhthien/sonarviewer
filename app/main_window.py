@@ -91,11 +91,20 @@ class SonarViewer(QMainWindow):
         self.control_panel.reset_zoom_clicked.connect(self.reset_zoom)
         self.control_panel.servo_toggled.connect(self.toggle_servo)
         self.control_panel.tx_toggled.connect(self.toggle_tx)
+        self.control_panel.capture_clicked.connect(self.toggle_capture)
+        self.control_panel.capture_prev_clicked.connect(self.prev_captured_pulse)
+        self.control_panel.capture_next_clicked.connect(self.next_captured_pulse)
 
         self.receiver = None
         self.is_streaming = True
         self.is_paused = False
         self.is_single_shot = False
+        
+        # Capture state
+        self.is_capturing = False
+        self.in_capture_browse_mode = False
+        self.captured_pulses = []
+        self.capture_current_idx = -1
 
         # Khởi động Receiver
         self.get_receiver()
@@ -333,6 +342,84 @@ class SonarViewer(QMainWindow):
             receiver.send_command("start")
             self.control_panel.info_label.setText("Streaming resumed.")
 
+    def toggle_capture(self):
+        if self.is_capturing or self.in_capture_browse_mode:
+            # Exit capture mode
+            self.is_capturing = False
+            self.in_capture_browse_mode = False
+            self.captured_pulses = []
+            self.capture_current_idx = -1
+            self.control_panel.set_capture_idle()
+            # Resume streaming if it was paused by capture finishing
+            if self.is_paused:
+                self.toggle_pause(False)
+                self.control_panel.set_paused_state(False)
+        else:
+            # Start capture mode
+            self.is_capturing = True
+            self.in_capture_browse_mode = False
+            self.captured_pulses = []
+            self.capture_current_idx = -1
+            self.control_panel.set_capturing_status(0, 10)
+            # Resume streaming if paused so we can capture
+            if self.is_paused:
+                self.toggle_pause(False)
+                self.control_panel.set_paused_state(False)
+
+    def show_captured_pulse(self, idx):
+        if not self.captured_pulses or idx < 0 or idx >= len(self.captured_pulses):
+            return
+        self.capture_current_idx = idx
+        pulse = self.captured_pulses[idx]
+        
+        # Update curve
+        self.curve.setData(pulse['voltages'])
+        
+        # Update SNR
+        self.snr_label.setText(pulse['snr_str'])
+        
+        # Update radar widget
+        receiver_id = pulse['receiver_id']
+        angle = pulse['angle']
+        shifted_voltages = pulse['shifted_voltages']
+        if receiver_id == 0:
+            self.radar_widget.set_data(angle, shifted_voltages)
+        else:
+            self.radar_widget.set_angle(angle)
+            
+        # Update info text
+        self.control_panel.info_label.setText(pulse['info_text'])
+        
+        # Update control panel browse label
+        self.control_panel.set_capture_browse(idx + 1, len(self.captured_pulses))
+
+        # Peak Hold Auto Scale for captured pulse
+        if self.control_panel.autoscale_cb.isChecked() and len(pulse['voltages']) > ACTIVE_SIGNAL_START_IDX:
+            active_voltages = pulse['voltages'][ACTIVE_SIGNAL_START_IDX:]
+            valid_samples = active_voltages[np.isfinite(active_voltages)]
+            if len(valid_samples) > 0:
+                peak = np.max(valid_samples)
+                if np.isfinite(peak):
+                    max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id == 0 or pulse['stream_idx'] == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                    target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                    if target_y_max > self.current_y_max:
+                        self.current_y_max = target_y_max
+                        self._is_updating_plot = True
+                        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                        self._is_updating_plot = False
+
+    def prev_captured_pulse(self):
+        if not self.in_capture_browse_mode or not self.captured_pulses:
+            return
+        new_idx = (self.capture_current_idx - 1) % len(self.captured_pulses)
+        self.show_captured_pulse(new_idx)
+
+    def next_captured_pulse(self):
+        if not self.in_capture_browse_mode or not self.captured_pulses:
+            return
+        new_idx = (self.capture_current_idx + 1) % len(self.captured_pulses)
+        self.show_captured_pulse(new_idx)
+
     def update_plot(self, samples, angle, receiver_id=0):
         if self.is_paused:
             return
@@ -365,6 +452,28 @@ class SonarViewer(QMainWindow):
             
             # Shift voltages to align radar history
             shifted_voltages = shift_voltages(voltages, pulse_type)
+            
+            if self.is_capturing:
+                pulse_data = {
+                    'voltages': voltages,
+                    'angle': angle,
+                    'receiver_id': receiver_id,
+                    'snr_str': snr_str,
+                    'shifted_voltages': shifted_voltages,
+                    'info_text': self.control_panel.info_label.text(),
+                    'stream_idx': stream_idx
+                }
+                self.captured_pulses.append(pulse_data)
+                self.control_panel.set_capturing_status(len(self.captured_pulses), 10)
+                
+                if len(self.captured_pulses) >= 10:
+                    self.is_capturing = False
+                    self.in_capture_browse_mode = True
+                    self.capture_current_idx = 0
+                    self.show_captured_pulse(0)
+                    self.toggle_pause(True)
+                    self.control_panel.set_paused_state(True)
+                    return  # Stop processing further for this pulse update
             
             if receiver_id == 0:
                 self.radar_widget.set_data(angle, shifted_voltages)
