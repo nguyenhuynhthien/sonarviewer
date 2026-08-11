@@ -1,6 +1,5 @@
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QCheckBox
 from PyQt6.QtCore import pyqtSignal, Qt
-from constants import DEFAULT_HOST
 from app.toggle_switch import ToggleSwitch
 
 class ControlPanel(QWidget):
@@ -32,8 +31,8 @@ class ControlPanel(QWidget):
         row2_layout = QHBoxLayout()
         row2_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        # IP Input
-        self.ip_input = QLineEdit(DEFAULT_HOST)
+        # USB device status/input placeholder
+        self.ip_input = QLineEdit("USB auto-detect")
         self.ip_input.setFixedWidth(120)
         self.ip_input.editingFinished.connect(self._on_ip_changed)
 
@@ -119,7 +118,7 @@ class ControlPanel(QWidget):
         servo_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         # Row 1 layout
-        row1_layout.addWidget(QLabel("ESP32 IP:"))
+        row1_layout.addWidget(QLabel("STM32 USB:"))
         row1_layout.addWidget(self.ip_input)
         row1_layout.addWidget(self.pause_btn)
         row1_layout.addWidget(self.single_btn)

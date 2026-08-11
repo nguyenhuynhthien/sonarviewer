@@ -118,6 +118,7 @@ class RadarWidget(QWidget):
 
     def set_angle(self, angle):
         self._update_sweep_direction(angle)
+        self.update()
 
     def wheelEvent(self, event):
         angle = event.angleDelta().y()

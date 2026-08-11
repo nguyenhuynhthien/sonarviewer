@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLab
 from PyQt6.QtCore import Qt
 
 from constants import (
-    DEFAULT_HOST, DEFAULT_PORT, MAX_SAMPLES,
+    MAX_SAMPLES,
     PLOT_Y_MIN, PLOT_Y_MAX_RX0, PLOT_Y_MAX_RX12_RAW_DEMOD, PLOT_Y_MAX_RX12_COMPRESSED,
     PLOT_DEFAULT_Y_MAX_RX0, PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD, PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED,
     ACTIVE_SIGNAL_START_IDX
@@ -26,6 +26,7 @@ class SonarViewer(QMainWindow):
         self.current_y_max = 0.01
         self.current_y_max0 = 0.01
         self.latest_voltages = None
+        self._last_sent_servo_angle = -1
 
         # Layout chính dạng dọc
         central_widget = QWidget()
@@ -110,31 +111,12 @@ class SonarViewer(QMainWindow):
         self.get_receiver()
 
     def get_receiver(self):
-        host = self.control_panel.ip_input.text()
-        if not self.receiver or self.receiver.host != host or not self.receiver.isRunning():
+        if not self.receiver or not self.receiver.isRunning():
             if self.receiver:
                 self.receiver.stop()
                 self.receiver.wait()
-            
-            # Đọc các thông số UI hiện tại để gửi khi kết nối
-            pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
-            idx = self.control_panel.signal_type_combo.currentIndex()
-            mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
-            servo_cmd = "servo:on" if self.control_panel.servo_switch.isChecked() else "servo:off"
             self.radar_widget.servo_enabled = self.control_panel.servo_switch.isChecked()
-            
-            txt = self.control_panel.tx_atten_combo.currentText()
-            atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
-            atten_cmd = f"tx_atten:{atten_val}"
-            tx_cmd = "tx:on" if self.control_panel.tx_switch.isChecked() else "tx:off"
-
-            rx_chan = self.control_panel.rx_select_combo.currentIndex()
-            rx_select_cmd = f"rx_select:{rx_chan}"
-
-            initial_configs = [f"cfg:{pulse_type}", f"mode:{mode}", servo_cmd, atten_cmd, tx_cmd, rx_select_cmd, "servo:90", "start"]
-
-            self.receiver = DataReceiver(host=host, port=DEFAULT_PORT, initial_configs=initial_configs)
-            self.receiver.pulse_type = pulse_type
+            self.receiver = DataReceiver()
             self.receiver.data_received.connect(self.update_plot)
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self._on_status_changed)
@@ -142,14 +124,16 @@ class SonarViewer(QMainWindow):
         return self.receiver
 
     def _on_ip_changed(self, host):
-        self.get_receiver()
+        return
 
     def _on_status_changed(self, status):
         self.control_panel.update_status(status)
 
     def send_servo_angle(self, angle):
         if not self.control_panel.servo_switch.isChecked():
-            self.get_receiver().send_command(f"servo:{angle}")
+            if angle != self._last_sent_servo_angle:
+                self._last_sent_servo_angle = angle
+                self.get_receiver().send_command(f"servo:{angle}")
 
     def change_tx_attenuation(self, txt):
         atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
@@ -421,18 +405,13 @@ class SonarViewer(QMainWindow):
         self.show_captured_pulse(new_idx)
 
     def update_plot(self, samples, angle, receiver_id=0):
+        if len(samples) == 0:
+            self.radar_widget.set_angle(angle)
+            return
+
         if self.is_paused:
             return
             
-        # Update radar history sweep from Sum channel even if not displaying plot
-        if receiver_id != self.control_panel.rx_select_combo.currentIndex():
-            if receiver_id == 0 and len(samples) > 0:
-                voltages = convert_samples_to_voltages(samples, receiver_id, self.control_panel.signal_type_combo.currentIndex())
-                pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
-                shifted_voltages = shift_voltages(voltages, pulse_type)
-                self.radar_widget.set_data(angle, shifted_voltages)
-            return
-
         if len(samples) > 0:
             stream_idx = self.control_panel.signal_type_combo.currentIndex()
             voltages = convert_samples_to_voltages(samples, receiver_id, stream_idx)

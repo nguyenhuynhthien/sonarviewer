@@ -2,17 +2,13 @@
 
 import numpy as np
 
-# --- Network Settings ---
-DEFAULT_HOST = "esp32.local"
-DEFAULT_PORT = 8080
-SOCKET_TIMEOUT = 2.0
-SOCKET_RECV_BUFFER = 65536
-
-# --- UDP Frame & Chunk Structure ---
-CHUNK_HEADER_SIZE = 4
-CHUNK_SAMPLES = 512
-CHUNKS_PER_FRAME = 4
-CHUNK_PACKET_SIZE = CHUNK_HEADER_SIZE + (CHUNK_SAMPLES * 2)  # 2 bytes per sample (int16)
+# --- Native USB CDC Settings ---
+USB_BAUDRATE = 115200
+USB_FRAME_MAGIC = b"FRX1"
+USB_FRAME_HEADER_SIZE = 8
+USB_MAX_SAMPLES = 2048
+STM32_USB_VID = 0x0483
+STM32_USB_PID = 0x5740
 
 # --- Physical & Signal Processing Parameters ---
 SPEED_OF_SOUND = 343.0  # m/s
