@@ -110,6 +110,7 @@ class DataReceiver(QThread):
         self.running = False
         self.serial_port = None
         self.initial_configs = initial_configs
+        self.pending_commands = []
         self.current_angle = 90
 
     def run(self):
@@ -126,6 +127,9 @@ class DataReceiver(QThread):
                     try:
                         self.serial_port = serial.Serial(device, USB_BAUDRATE, timeout=0.1)
                         self.status_changed.emit(f"Connected to {device}")
+                        for command in self.pending_commands:
+                            self.serial_port.write((command + "\n").encode("ascii"))
+                        self.pending_commands.clear()
                     except serial.SerialException as error:
                         self.status_changed.emit(f"USB error: {error}")
                         self.msleep(500)
@@ -151,8 +155,14 @@ class DataReceiver(QThread):
             self.running = False
             self.status_changed.emit("Disconnected")
 
-    def send_command(self, _cmd):
-        return
+    def send_command(self, command):
+        if self.serial_port is None or not self.serial_port.is_open:
+            self.pending_commands.append(command)
+            return
+        try:
+            self.serial_port.write((command + "\n").encode("ascii"))
+        except (serial.SerialException, OSError):
+            self.pending_commands.append(command)
 
     def stop(self):
         self.running = False

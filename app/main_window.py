@@ -144,6 +144,7 @@ class SonarViewer(QMainWindow):
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self._on_status_changed)
             self.receiver.start()
+            self.send_all_configs()
         return self.receiver
 
     def _on_ip_changed(self, host):
