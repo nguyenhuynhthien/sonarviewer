@@ -43,8 +43,10 @@ class UsbFrameParser:
                     break
                 telemetry.append({
                     "sequence": int.from_bytes(self.buffer[8:12], "little"),
-                    "fs_hz": int.from_bytes(self.buffer[12:16], "little"),
-                    "period_ns": int.from_bytes(self.buffer[16:20], "little"),
+                    "adc_fs_hz": int.from_bytes(self.buffer[12:16], "little"),
+                    "adc_pri_us": int.from_bytes(self.buffer[16:20], "little"),
+                    "dac_fs_hz": int.from_bytes(self.buffer[20:24], "little"),
+                    "dac_pri_us": int.from_bytes(self.buffer[24:28], "little"),
                 })
                 del self.buffer[:USB_LOG_SIZE]
                 continue
@@ -98,7 +100,8 @@ class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int, int)
     target_received = pyqtSignal(float, int, float, float, int)
     status_changed = pyqtSignal(str)
-    telemetry_received = pyqtSignal(int, int, float)
+    telemetry_received = pyqtSignal(int, int, int, int, int)
+    telemetry_received = pyqtSignal(int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
     bytes_received = pyqtSignal(int)
 
@@ -136,7 +139,7 @@ class DataReceiver(QThread):
                     for samples in signal_frames:
                         self.data_received.emit(samples, self.current_angle, 0)
                     for log in telemetry_frames:
-                        self.telemetry_received.emit(log["sequence"], log["fs_hz"], log["period_ns"])
+                        self.telemetry_received.emit(log["sequence"], log["adc_fs_hz"], log["adc_pri_us"], log["dac_fs_hz"], log["dac_pri_us"])
                     for log in debug_frames:
                         self.debug_received.emit(log["counter"], log["tick_ms"], log["adc_count"], log["dac_count"], log["timer_counter"], log["timer_enabled"], log["registers"], log["diagnostics"])
                 except (serial.SerialException, OSError) as error:

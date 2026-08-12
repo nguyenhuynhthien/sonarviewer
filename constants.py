@@ -1,3 +1,4 @@
+USB_LOG_SIZE = 28
 # Constants for SonarViewer
 
 import numpy as np

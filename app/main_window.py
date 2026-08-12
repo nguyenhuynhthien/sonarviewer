@@ -152,14 +152,15 @@ class SonarViewer(QMainWindow):
     def _on_status_changed(self, status):
         self.control_panel.update_status(status)
 
-    def update_telemetry(self, sequence, fs_hz, period_ns):
+    def update_telemetry(self, sequence, adc_fs_hz, adc_pri_us, dac_fs_hz, dac_pri_us):
         if self.telemetry_label.toPlainText() == "No telemetry received":
             self.telemetry_label.clear()
         self.telemetry_label.appendPlainText(
             f"Sequence: {sequence}\n"
-            f"Measured sampling rate: {fs_hz:,} Hz\n"
-            f"Measured period: {period_ns / 1000.0:.3f} us\n"
-            f"Nominal rate: 160,000 Hz\n"
+            f"ADC sampling rate: {adc_fs_hz:,} Hz\n"
+            f"ADC PRI: {adc_pri_us:,} us\n"
+            f"DAC sampling rate: {dac_fs_hz:,} Hz\n"
+            f"DAC PRI: {dac_pri_us:,} us\n"
         )
 
     def update_debug(self, counter, tick_ms, adc_count, dac_count, timer_counter, timer_enabled, registers, diagnostics):
