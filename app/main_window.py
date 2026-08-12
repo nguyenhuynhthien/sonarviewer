@@ -3,8 +3,9 @@ import os
 import json
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel
+from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QTabWidget, QScrollArea, QPlainTextEdit, QCheckBox
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QTextCursor
 
 from constants import (
     MAX_SAMPLES,
@@ -65,7 +66,26 @@ class SonarViewer(QMainWindow):
         self.plot_widget.getViewBox().sigRangeChanged.connect(self._on_plot_range_changed)
         self._is_updating_plot = False
 
-        top_layout.addLayout(right_layout, stretch=1)
+        signal_tab = QWidget()
+        signal_tab.setLayout(right_layout)
+        telemetry_tab = QWidget()
+        telemetry_layout = QVBoxLayout(telemetry_tab)
+        self.telemetry_label = QPlainTextEdit("No telemetry received")
+        self.telemetry_label.setReadOnly(True)
+        self.telemetry_label.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.telemetry_label.setMaximumBlockCount(2000)
+        self.telemetry_label.setStyleSheet("font-family: Menlo, Monaco, monospace; font-size: 14px; padding: 12px;")
+        self.telemetry_autoscroll = QCheckBox("Auto-scroll")
+        self.telemetry_autoscroll.setChecked(True)
+        telemetry_layout.addWidget(self.telemetry_autoscroll)
+        telemetry_layout.addWidget(self.telemetry_label, stretch=1)
+        telemetry_scroll = QScrollArea()
+        telemetry_scroll.setWidgetResizable(True)
+        telemetry_scroll.setWidget(telemetry_tab)
+        self.signal_tabs = QTabWidget()
+        self.signal_tabs.addTab(signal_tab, "Signal")
+        self.signal_tabs.addTab(telemetry_scroll, "Telemetry")
+        top_layout.addWidget(self.signal_tabs, stretch=2)
 
         # SNR Label overlaying the plot widget
         self.snr_label = QLabel("SNR: -- dB", self.plot_widget)
@@ -118,6 +138,9 @@ class SonarViewer(QMainWindow):
             self.radar_widget.servo_enabled = self.control_panel.servo_switch.isChecked()
             self.receiver = DataReceiver()
             self.receiver.data_received.connect(self.update_plot)
+            self.receiver.telemetry_received.connect(self.update_telemetry)
+            self.receiver.debug_received.connect(self.update_debug)
+            self.receiver.bytes_received.connect(self.update_bytes_received)
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self._on_status_changed)
             self.receiver.start()
@@ -128,6 +151,59 @@ class SonarViewer(QMainWindow):
 
     def _on_status_changed(self, status):
         self.control_panel.update_status(status)
+
+    def update_telemetry(self, sequence, fs_hz, period_ns):
+        if self.telemetry_label.toPlainText() == "No telemetry received":
+            self.telemetry_label.clear()
+        self.telemetry_label.appendPlainText(
+            f"Sequence: {sequence}\n"
+            f"Measured sampling rate: {fs_hz:,} Hz\n"
+            f"Measured period: {period_ns / 1000.0:.3f} us\n"
+            f"Nominal rate: 160,000 Hz\n"
+        )
+
+    def update_debug(self, counter, tick_ms, adc_count, dac_count, timer_counter, timer_enabled, registers, diagnostics):
+        if self.telemetry_label.toPlainText() == "No telemetry received":
+            self.telemetry_label.clear()
+        self.telemetry_label.appendPlainText(
+            f"USB heartbeat received\n"
+            f"Debug counter: {counter}\n"
+            f"Firmware tick: {tick_ms} ms\n\n"
+            f"ADC DMA completed: {adc_count}\n"
+            f"DAC DMA completed: {dac_count}\n\n"
+        )
+        self.telemetry_label.appendPlainText(
+            f"TIM6 CNT: {timer_counter}\n"
+            f"TIM6 enabled: {timer_enabled}\n"
+            f"ADC CR/CFGR/ISR: {[hex(value) for value in registers[:3]]}\n"
+            f"DAC CR: {hex(registers[3])}\n"
+            f"DMA0 CCR/CSR: {[hex(value) for value in registers[4:6]]}\n"
+            f"DMA1 CCR/CSR: {[hex(value) for value in registers[6:8]]}\n"
+            f"DMA0 CLBAR/CLLR/CBR1: {[hex(value) for value in registers[8:11]]}\n"
+            f"DMA1 CLBAR/CLLR/CBR1: {[hex(value) for value in registers[11:14]]}\n"
+            f"ADC SQR1/SMPR1/DR: {[hex(value) for value in registers[14:17]]}\n"
+            f"DMA0 CTR1/CTR2/CTR3/CDSR: {[hex(value) for value in registers[17:21]]}\n"
+            f"ADC CFGR2: {hex(registers[21])}\n"
+            f"TIM6 CR1/CR2/ARR/PSC: {[hex(value) for value in registers[22:26]]}\n"
+            f"ADC overruns: {diagnostics[0]}\n"
+            f"ADC DMA errors: {diagnostics[1]}\n"
+            f"ADC restarts: {diagnostics[2]}\n"
+            f"DMA0 CTR3: {hex(diagnostics[3])}\n"
+            f"ADC IER: {hex(diagnostics[4])}\n"
+            f"ADC frame min/max: {[hex(value) for value in diagnostics[5:7]]}\n"
+            f"DMA0 CDAR/CLLR: {[hex(value) for value in diagnostics[7:8]]}\n"
+        )
+        if self.telemetry_autoscroll.isChecked():
+            self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
+            self.telemetry_label.ensureCursorVisible()
+
+    def update_bytes_received(self, count):
+        self._usb_bytes_received = getattr(self, "_usb_bytes_received", 0) + count
+        if "No telemetry received" in self.telemetry_label.toPlainText():
+            self.telemetry_label.setPlainText(
+                f"USB bytes received: {self._usb_bytes_received}\n"
+                "No recognized telemetry frame yet"
+            )
 
     def send_servo_angle(self, angle):
         if not self.control_panel.servo_switch.isChecked():
@@ -416,6 +492,7 @@ class SonarViewer(QMainWindow):
             stream_idx = self.control_panel.signal_type_combo.currentIndex()
             voltages = convert_samples_to_voltages(samples, receiver_id, stream_idx)
             self.latest_voltages = voltages
+            display_voltages = voltages
 
             # Calculate SNR
             pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
@@ -456,7 +533,7 @@ class SonarViewer(QMainWindow):
             
             if receiver_id == 0:
                 self.radar_widget.set_data(angle, shifted_voltages)
-                self.curve.setData(voltages)
+                self.curve.setData(display_voltages)
             elif receiver_id == 1:
                 self.radar_widget.set_angle(angle)
                 self.curve.setData(voltages)
@@ -464,14 +541,16 @@ class SonarViewer(QMainWindow):
                 self.curve.setData(voltages)
             
             # Peak Hold Auto Scale
-            if self.control_panel.autoscale_cb.isChecked() and len(voltages) > ACTIVE_SIGNAL_START_IDX:
-                active_voltages = voltages[ACTIVE_SIGNAL_START_IDX:]
+            if self.control_panel.autoscale_cb.isChecked() and len(display_voltages) > ACTIVE_SIGNAL_START_IDX:
+                active_voltages = display_voltages[ACTIVE_SIGNAL_START_IDX:]
                 valid_samples = active_voltages[np.isfinite(active_voltages)]
                 if len(valid_samples) > 0:
                     peak = np.max(valid_samples)
                     if np.isfinite(peak):
                         max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id == 0 or stream_idx == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                         target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                        if receiver_id == 0:
+                            target_y_max = max(target_y_max, 0.05)
                         if target_y_max > self.current_y_max:
                             self.current_y_max = target_y_max
                             self._is_updating_plot = True

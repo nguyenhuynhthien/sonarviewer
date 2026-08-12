@@ -10,6 +10,10 @@ from constants import (
     USB_FRAME_HEADER_SIZE,
     USB_FRAME_MAGIC,
     USB_MAX_SAMPLES,
+    USB_LOG_MAGIC,
+    USB_LOG_SIZE,
+    USB_DEBUG_MAGIC,
+    USB_DEBUG_SIZE,
 )
 
 
@@ -20,14 +24,45 @@ class UsbFrameParser:
     def feed(self, data):
         self.buffer.extend(data)
         frames = []
+        telemetry = []
+        debug = []
 
         while True:
-            start = self.buffer.find(USB_FRAME_MAGIC)
-            if start < 0:
+            signal_start = self.buffer.find(USB_FRAME_MAGIC)
+            log_start = self.buffer.find(USB_LOG_MAGIC)
+            debug_start = self.buffer.find(USB_DEBUG_MAGIC)
+            starts = [value for value in (signal_start, log_start, debug_start) if value >= 0]
+            if not starts:
                 self.buffer = self.buffer[-(len(USB_FRAME_MAGIC) - 1):]
                 break
+            start = min(starts)
             if start:
                 del self.buffer[:start]
+            if self.buffer.startswith(USB_LOG_MAGIC):
+                if len(self.buffer) < USB_LOG_SIZE:
+                    break
+                telemetry.append({
+                    "sequence": int.from_bytes(self.buffer[8:12], "little"),
+                    "fs_hz": int.from_bytes(self.buffer[12:16], "little"),
+                    "period_ns": int.from_bytes(self.buffer[16:20], "little"),
+                })
+                del self.buffer[:USB_LOG_SIZE]
+                continue
+            if self.buffer.startswith(USB_DEBUG_MAGIC):
+                if len(self.buffer) < USB_DEBUG_SIZE:
+                    break
+                debug.append({
+                    "counter": int.from_bytes(self.buffer[8:12], "little"),
+                    "tick_ms": int.from_bytes(self.buffer[12:16], "little"),
+                    "adc_count": int.from_bytes(self.buffer[16:20], "little"),
+                    "dac_count": int.from_bytes(self.buffer[20:24], "little"),
+                    "timer_counter": int.from_bytes(self.buffer[24:28], "little"),
+                    "timer_enabled": bool(self.buffer[28]),
+                    "registers": [int.from_bytes(self.buffer[offset:offset + 4], "little") for offset in range(32, 132, 4)],
+                    "diagnostics": [int.from_bytes(self.buffer[offset:offset + 4], "little") for offset in range(132, 164, 4)],
+                })
+                del self.buffer[:USB_DEBUG_SIZE]
+                continue
             if len(self.buffer) < USB_FRAME_HEADER_SIZE:
                 break
 
@@ -44,7 +79,7 @@ class UsbFrameParser:
             del self.buffer[:frame_size]
             frames.append(np.frombuffer(payload, dtype="<i2").astype(np.float32))
 
-        return frames
+        return frames, telemetry, debug
 
 
 def find_stm32_port():
@@ -63,6 +98,9 @@ class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int, int)
     target_received = pyqtSignal(float, int, float, float, int)
     status_changed = pyqtSignal(str)
+    telemetry_received = pyqtSignal(int, int, float)
+    debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
+    bytes_received = pyqtSignal(int)
 
     def __init__(self, initial_configs=None):
         super().__init__()
@@ -92,8 +130,15 @@ class DataReceiver(QThread):
 
                 try:
                     data = self.serial_port.read(8192)
-                    for samples in parser.feed(data):
+                    if data:
+                        self.bytes_received.emit(len(data))
+                    signal_frames, telemetry_frames, debug_frames = parser.feed(data)
+                    for samples in signal_frames:
                         self.data_received.emit(samples, self.current_angle, 0)
+                    for log in telemetry_frames:
+                        self.telemetry_received.emit(log["sequence"], log["fs_hz"], log["period_ns"])
+                    for log in debug_frames:
+                        self.debug_received.emit(log["counter"], log["tick_ms"], log["adc_count"], log["dac_count"], log["timer_counter"], log["timer_enabled"], log["registers"], log["diagnostics"])
                 except (serial.SerialException, OSError) as error:
                     self.status_changed.emit(f"USB disconnected: {error}")
                     self._close_port()

@@ -17,8 +17,8 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
         return np.array([], dtype=np.float32)
         
     if receiver_id == 0:
-        # Rx0 is 8-pulse accumulated Sum (Q15 max 32767 -> 13.2V max scale)
-        return (samples / Q15_MAX_VAL_RX0) * VOLTAGE_SCALE_RX0
+        # STM32 ADCService sends unsigned 12-bit ADC samples, not Q15 data.
+        return (np.clip(samples, 0.0, 4095.0) / 4095.0) * 3.3
     else:
         if stream_idx == 0:  # Raw
             return (samples / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_RAW_MULT + VOLTAGE_SCALE_RX_RAW_OFFSET
