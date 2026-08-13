@@ -153,16 +153,21 @@ class SonarViewer(QMainWindow):
     def _on_status_changed(self, status):
         self.control_panel.update_status(status)
 
-    def update_telemetry(self, sequence, adc_fs_hz, adc_pri_us, dac_fs_hz, dac_pri_us):
+    def update_telemetry(self, sequence, adc1_fs_hz, adc1_pri_us, adc2_fs_hz, adc2_pri_us, dac_fs_hz, dac_pri_us):
         if self.telemetry_label.toPlainText() == "No telemetry received":
             self.telemetry_label.clear()
         self.telemetry_label.appendPlainText(
             f"Sequence: {sequence}\n"
-            f"ADC sampling rate: {adc_fs_hz:,} Hz\n"
-            f"ADC PRI: {adc_pri_us:,} us\n"
+            f"ADC1 sampling rate: {adc1_fs_hz:,} Hz\n"
+            f"ADC1 PRI: {adc1_pri_us:,} us\n"
+            f"ADC2 sampling rate: {adc2_fs_hz:,} Hz\n"
+            f"ADC2 PRI: {adc2_pri_us:,} us\n"
             f"DAC sampling rate: {dac_fs_hz:,} Hz\n"
             f"DAC PRI: {dac_pri_us:,} us\n"
         )
+        if self.telemetry_autoscroll.isChecked():
+            self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
+            self.telemetry_label.ensureCursorVisible()
 
     def update_debug(self, counter, tick_ms, adc_count, dac_count, timer_counter, timer_enabled, registers, diagnostics):
         if self.telemetry_label.toPlainText() == "No telemetry received":
@@ -248,7 +253,11 @@ class SonarViewer(QMainWindow):
         tx_cmd = "tx:on" if self.control_panel.tx_switch.isChecked() else "tx:off"
         self.get_receiver().send_command(tx_cmd)
         
-        self.control_panel.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd}")
+        # 6. Rx Select Channel
+        rx_chan = self.control_panel.rx_select_combo.currentIndex()
+        self.get_receiver().send_command(f"rx_select:{rx_chan}")
+        
+        self.control_panel.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd} | rx_select:{rx_chan}")
 
     def change_rx_channel(self, rx_chan):
         if rx_chan == 0:

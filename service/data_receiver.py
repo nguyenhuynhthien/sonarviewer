@@ -28,12 +28,12 @@ class UsbFrameParser:
         debug = []
 
         while True:
-            signal_start = self.buffer.find(USB_FRAME_MAGIC)
+            signal_start = self.buffer.find(b"FRX")
             log_start = self.buffer.find(USB_LOG_MAGIC)
             debug_start = self.buffer.find(USB_DEBUG_MAGIC)
             starts = [value for value in (signal_start, log_start, debug_start) if value >= 0]
             if not starts:
-                self.buffer = self.buffer[-(len(USB_FRAME_MAGIC) - 1):]
+                self.buffer = self.buffer[-3:]
                 break
             start = min(starts)
             if start:
@@ -43,10 +43,12 @@ class UsbFrameParser:
                     break
                 telemetry.append({
                     "sequence": int.from_bytes(self.buffer[8:12], "little"),
-                    "adc_fs_hz": int.from_bytes(self.buffer[12:16], "little"),
-                    "adc_pri_us": int.from_bytes(self.buffer[16:20], "little"),
-                    "dac_fs_hz": int.from_bytes(self.buffer[20:24], "little"),
-                    "dac_pri_us": int.from_bytes(self.buffer[24:28], "little"),
+                    "adc1_fs_hz": int.from_bytes(self.buffer[12:16], "little"),
+                    "adc1_pri_us": int.from_bytes(self.buffer[16:20], "little"),
+                    "adc2_fs_hz": int.from_bytes(self.buffer[20:24], "little"),
+                    "adc2_pri_us": int.from_bytes(self.buffer[24:28], "little"),
+                    "dac_fs_hz": int.from_bytes(self.buffer[28:32], "little"),
+                    "dac_pri_us": int.from_bytes(self.buffer[32:36], "little"),
                 })
                 del self.buffer[:USB_LOG_SIZE]
                 continue
@@ -68,9 +70,14 @@ class UsbFrameParser:
             if len(self.buffer) < USB_FRAME_HEADER_SIZE:
                 break
 
+            # Verify it's followed by '1' or '2'
+            if self.buffer[3] not in (0x31, 0x32):  # ASCII '1' or '2'
+                del self.buffer[:3]
+                continue
+
             sample_count = int.from_bytes(self.buffer[4:6], "little")
             if sample_count == 0 or sample_count > USB_MAX_SAMPLES:
-                del self.buffer[:len(USB_FRAME_MAGIC)]
+                del self.buffer[:4]
                 continue
 
             frame_size = USB_FRAME_HEADER_SIZE + sample_count * 2
@@ -100,8 +107,7 @@ class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int, int)
     target_received = pyqtSignal(float, int, float, float, int)
     status_changed = pyqtSignal(str)
-    telemetry_received = pyqtSignal(int, int, int, int, int)
-    telemetry_received = pyqtSignal(int, int, int, int, int)
+    telemetry_received = pyqtSignal(int, int, int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
     bytes_received = pyqtSignal(int)
 
@@ -129,6 +135,7 @@ class DataReceiver(QThread):
                         self.status_changed.emit(f"Connected to {device}")
                         for command in self.pending_commands:
                             self.serial_port.write((command + "\n").encode("ascii"))
+                            self.msleep(50)
                         self.pending_commands.clear()
                     except serial.SerialException as error:
                         self.status_changed.emit(f"USB error: {error}")
@@ -143,7 +150,15 @@ class DataReceiver(QThread):
                     for samples in signal_frames:
                         self.data_received.emit(samples, self.current_angle, 0)
                     for log in telemetry_frames:
-                        self.telemetry_received.emit(log["sequence"], log["adc_fs_hz"], log["adc_pri_us"], log["dac_fs_hz"], log["dac_pri_us"])
+                        self.telemetry_received.emit(
+                            log["sequence"],
+                            log["adc1_fs_hz"],
+                            log["adc1_pri_us"],
+                            log["adc2_fs_hz"],
+                            log["adc2_pri_us"],
+                            log["dac_fs_hz"],
+                            log["dac_pri_us"]
+                        )
                     for log in debug_frames:
                         self.debug_received.emit(log["counter"], log["tick_ms"], log["adc_count"], log["dac_count"], log["timer_counter"], log["timer_enabled"], log["registers"], log["diagnostics"])
                 except (serial.SerialException, OSError) as error:
