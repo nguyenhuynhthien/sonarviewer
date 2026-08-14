@@ -140,6 +140,7 @@ class SonarViewer(QMainWindow):
             self.receiver.data_received.connect(self.update_plot)
             self.receiver.telemetry_received.connect(self.update_telemetry)
             self.receiver.debug_received.connect(self.update_debug)
+            self.receiver.dsp_received.connect(self.update_dsp_log)
             self.receiver.bytes_received.connect(self.update_bytes_received)
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self._on_status_changed)
@@ -164,6 +165,20 @@ class SonarViewer(QMainWindow):
             f"ADC2 PRI: {adc2_pri_us:,} us\n"
             f"DAC sampling rate: {dac_fs_hz:,} Hz\n"
             f"DAC PRI: {dac_pri_us:,} us\n"
+        )
+        if self.telemetry_autoscroll.isChecked():
+            self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
+            self.telemetry_label.ensureCursorVisible()
+
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, send_us):
+        if self.telemetry_label.toPlainText() == "No telemetry received":
+            self.telemetry_label.clear()
+        self.telemetry_label.appendPlainText(
+            f"--- DSP Log #{sequence} ---\n"
+            f"Total DSP time: {total_us:,} us\n"
+            f"Read ADC: {read_us:,} us\n"
+            f"BPF Filter: {bpf_us:,} us\n"
+            f"Send Data: {send_us:,} us\n"
         )
         if self.telemetry_autoscroll.isChecked():
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)

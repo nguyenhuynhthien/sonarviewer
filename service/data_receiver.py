@@ -14,6 +14,8 @@ from constants import (
     USB_LOG_SIZE,
     USB_DEBUG_MAGIC,
     USB_DEBUG_SIZE,
+    USB_DSP_MAGIC,
+    USB_DSP_SIZE,
 )
 
 
@@ -26,12 +28,14 @@ class UsbFrameParser:
         frames = []
         telemetry = []
         debug = []
+        dsp = []
 
         while True:
             signal_start = self.buffer.find(b"FRX")
             log_start = self.buffer.find(USB_LOG_MAGIC)
             debug_start = self.buffer.find(USB_DEBUG_MAGIC)
-            starts = [value for value in (signal_start, log_start, debug_start) if value >= 0]
+            dsp_start = self.buffer.find(USB_DSP_MAGIC)
+            starts = [value for value in (signal_start, log_start, debug_start, dsp_start) if value >= 0]
             if not starts:
                 self.buffer = self.buffer[-3:]
                 break
@@ -67,6 +71,18 @@ class UsbFrameParser:
                 })
                 del self.buffer[:USB_DEBUG_SIZE]
                 continue
+            if self.buffer.startswith(USB_DSP_MAGIC):
+                if len(self.buffer) < USB_DSP_SIZE:
+                    break
+                dsp.append({
+                    "sequence": int.from_bytes(self.buffer[4:8], "little"),
+                    "total_us": int.from_bytes(self.buffer[8:12], "little"),
+                    "read_us": int.from_bytes(self.buffer[12:16], "little"),
+                    "bpf_us": int.from_bytes(self.buffer[16:20], "little"),
+                    "send_us": int.from_bytes(self.buffer[20:24], "little"),
+                })
+                del self.buffer[:USB_DSP_SIZE]
+                continue
             if len(self.buffer) < USB_FRAME_HEADER_SIZE:
                 break
 
@@ -88,7 +104,7 @@ class UsbFrameParser:
             del self.buffer[:frame_size]
             frames.append(np.frombuffer(payload, dtype="<i2").astype(np.float32))
 
-        return frames, telemetry, debug
+        return frames, telemetry, debug, dsp
 
 
 def find_stm32_port():
@@ -109,6 +125,7 @@ class DataReceiver(QThread):
     status_changed = pyqtSignal(str)
     telemetry_received = pyqtSignal(int, int, int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
+    dsp_received = pyqtSignal(int, int, int, int, int)
     bytes_received = pyqtSignal(int)
 
     def __init__(self, initial_configs=None):
@@ -146,7 +163,7 @@ class DataReceiver(QThread):
                     data = self.serial_port.read(8192)
                     if data:
                         self.bytes_received.emit(len(data))
-                    signal_frames, telemetry_frames, debug_frames = parser.feed(data)
+                    signal_frames, telemetry_frames, debug_frames, dsp_frames = parser.feed(data)
                     for samples in signal_frames:
                         self.data_received.emit(samples, self.current_angle, 0)
                     for log in telemetry_frames:
@@ -161,6 +178,14 @@ class DataReceiver(QThread):
                         )
                     for log in debug_frames:
                         self.debug_received.emit(log["counter"], log["tick_ms"], log["adc_count"], log["dac_count"], log["timer_counter"], log["timer_enabled"], log["registers"], log["diagnostics"])
+                    for log in dsp_frames:
+                        self.dsp_received.emit(
+                            log["sequence"],
+                            log["total_us"],
+                            log["read_us"],
+                            log["bpf_us"],
+                            log["send_us"]
+                        )
                 except (serial.SerialException, OSError) as error:
                     self.status_changed.emit(f"USB disconnected: {error}")
                     self._close_port()
