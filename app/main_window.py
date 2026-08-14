@@ -19,6 +19,20 @@ from app.control_panel import ControlPanel
 from service.data_receiver import DataReceiver
 from service.signal_processor import convert_samples_to_voltages, calculate_snr, shift_voltages
 
+
+def format_vietnamese(value, precision=0):
+    """Định dạng số theo kiểu Việt Nam: dấu chấm ngăn cách phần nghìn, dấu phẩy thập phân."""
+    if isinstance(value, float):
+        formatted = f"{value:,.{precision}f}"
+        parts = formatted.split('.')
+        left = parts[0].replace(',', '.')
+        if len(parts) > 1:
+            return left + ',' + parts[1]
+        return left
+    else:
+        return f"{value:,}".replace(',', '.')
+
+
 class SonarViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -158,13 +172,13 @@ class SonarViewer(QMainWindow):
         if self.telemetry_label.toPlainText() == "No telemetry received":
             self.telemetry_label.clear()
         self.telemetry_label.appendPlainText(
-            f"Sequence: {sequence}\n"
-            f"ADC1 sampling rate: {adc1_fs_hz:,} Hz\n"
-            f"ADC1 PRI: {adc1_pri_us:,} us\n"
-            f"ADC2 sampling rate: {adc2_fs_hz:,} Hz\n"
-            f"ADC2 PRI: {adc2_pri_us:,} us\n"
-            f"DAC sampling rate: {dac_fs_hz:,} Hz\n"
-            f"DAC PRI: {dac_pri_us:,} us\n"
+            f"Sequence: {format_vietnamese(sequence)}\n"
+            f"ADC1 sampling rate: {format_vietnamese(adc1_fs_hz)} Hz\n"
+            f"ADC1 PRI: {format_vietnamese(adc1_pri_us)} us\n"
+            f"ADC2 sampling rate: {format_vietnamese(adc2_fs_hz)} Hz\n"
+            f"ADC2 PRI: {format_vietnamese(adc2_pri_us)} us\n"
+            f"DAC sampling rate: {format_vietnamese(dac_fs_hz)} Hz\n"
+            f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n"
         )
         if self.telemetry_autoscroll.isChecked():
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
@@ -174,11 +188,11 @@ class SonarViewer(QMainWindow):
         if self.telemetry_label.toPlainText() == "No telemetry received":
             self.telemetry_label.clear()
         self.telemetry_label.appendPlainText(
-            f"--- DSP Log #{sequence} ---\n"
-            f"Total DSP time: {total_us:,} us\n"
-            f"Read ADC: {read_us:,} us\n"
-            f"BPF Filter: {bpf_us:,} us\n"
-            f"Send Data: {send_us:,} us\n"
+            f"--- DSP Log #{format_vietnamese(sequence)} ---\n"
+            f"Total DSP time: {format_vietnamese(total_us)} us\n"
+            f"Read ADC: {format_vietnamese(read_us)} us\n"
+            f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
+            f"Send Data: {format_vietnamese(send_us)} us\n"
         )
         if self.telemetry_autoscroll.isChecked():
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
@@ -189,13 +203,13 @@ class SonarViewer(QMainWindow):
             self.telemetry_label.clear()
         self.telemetry_label.appendPlainText(
             f"USB heartbeat received\n"
-            f"Debug counter: {counter}\n"
-            f"Firmware tick: {tick_ms} ms\n\n"
-            f"ADC DMA completed: {adc_count}\n"
-            f"DAC DMA completed: {dac_count}\n\n"
+            f"Debug counter: {format_vietnamese(counter)}\n"
+            f"Firmware tick: {format_vietnamese(tick_ms)} ms\n\n"
+            f"ADC DMA completed: {format_vietnamese(adc_count)}\n"
+            f"DAC DMA completed: {format_vietnamese(dac_count)}\n\n"
         )
         self.telemetry_label.appendPlainText(
-            f"TIM6 CNT: {timer_counter}\n"
+            f"TIM6 CNT: {format_vietnamese(timer_counter)}\n"
             f"TIM6 enabled: {timer_enabled}\n"
             f"ADC CR/CFGR/ISR: {[hex(value) for value in registers[:3]]}\n"
             f"DAC CR: {hex(registers[3])}\n"
@@ -207,9 +221,9 @@ class SonarViewer(QMainWindow):
             f"DMA0 CTR1/CTR2/CTR3/CDSR: {[hex(value) for value in registers[17:21]]}\n"
             f"ADC CFGR2: {hex(registers[21])}\n"
             f"TIM6 CR1/CR2/ARR/PSC: {[hex(value) for value in registers[22:26]]}\n"
-            f"ADC overruns: {diagnostics[0]}\n"
-            f"ADC DMA errors: {diagnostics[1]}\n"
-            f"ADC restarts: {diagnostics[2]}\n"
+            f"ADC overruns: {format_vietnamese(diagnostics[0])}\n"
+            f"ADC DMA errors: {format_vietnamese(diagnostics[1])}\n"
+            f"ADC restarts: {format_vietnamese(diagnostics[2])}\n"
             f"DMA0 CTR3: {hex(diagnostics[3])}\n"
             f"ADC IER: {hex(diagnostics[4])}\n"
             f"ADC frame min/max: {[hex(value) for value in diagnostics[5:7]]}\n"
@@ -223,7 +237,7 @@ class SonarViewer(QMainWindow):
         self._usb_bytes_received = getattr(self, "_usb_bytes_received", 0) + count
         if "No telemetry received" in self.telemetry_label.toPlainText():
             self.telemetry_label.setPlainText(
-                f"USB bytes received: {self._usb_bytes_received}\n"
+                f"USB bytes received: {format_vietnamese(self._usb_bytes_received)}\n"
                 "No recognized telemetry frame yet"
             )
 
