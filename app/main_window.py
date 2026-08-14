@@ -266,7 +266,8 @@ class SonarViewer(QMainWindow):
         
         # 2. Signal Stream
         idx = self.control_panel.signal_type_combo.currentIndex()
-        mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
+        modes = ["raw", "bpf", "demod", "compressed"]
+        mode = modes[idx] if idx < len(modes) else "raw"
         self.get_receiver().send_command(f"mode:{mode}")
         
         # 3. Servo State
@@ -307,8 +308,8 @@ class SonarViewer(QMainWindow):
             y_lim = PLOT_Y_MAX_RX0
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
-            y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_Y_MAX_RX12_RAW_DEMOD
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+            y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_Y_MAX_RX12_RAW_DEMOD
+            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
             
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
         self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
@@ -376,14 +377,15 @@ class SonarViewer(QMainWindow):
 
     def change_signal_type(self, idx):
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
+        modes = ["raw", "bpf", "demod", "compressed"]
+        mode = modes[idx] if idx < len(modes) else "raw"
+
         if rx_chan == 0:
-            mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
             y_lim = PLOT_Y_MAX_RX0
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
-            mode = "raw" if idx == 0 else ("demod" if idx == 1 else "compressed")
-            y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_Y_MAX_RX12_RAW_DEMOD
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+            y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_Y_MAX_RX12_RAW_DEMOD
+            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
         
         self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
         self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y

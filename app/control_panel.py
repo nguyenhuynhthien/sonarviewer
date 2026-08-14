@@ -54,7 +54,7 @@ class ControlPanel(QWidget):
         self.pulse_type_combo.activated.connect(self._on_pulse_type_activated)
 
         self.signal_type_combo = QComboBox()
-        self.signal_type_combo.addItems(["Raw", "Demodulated", "Compressed"])
+        self.signal_type_combo.addItems(["Raw", "BPF", "Demodulated", "Compressed"])
         self.signal_type_combo.activated.connect(self.signal_type_changed.emit)
 
         self.tx_atten_combo = QComboBox()
