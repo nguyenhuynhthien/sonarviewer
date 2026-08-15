@@ -1,3 +1,4 @@
+import struct
 import numpy as np
 import serial
 from serial.tools import list_ports
@@ -16,6 +17,9 @@ from constants import (
     USB_DEBUG_SIZE,
     USB_DSP_MAGIC,
     USB_DSP_SIZE,
+    USB_TARGET_MAGIC,
+    USB_TARGET_HEADER_SIZE,
+    USB_TARGET_ENTRY_SIZE,
 )
 
 
@@ -29,13 +33,15 @@ class UsbFrameParser:
         telemetry = []
         debug = []
         dsp = []
+        targets = []
 
         while True:
             signal_start = self.buffer.find(b"FRX")
             log_start = self.buffer.find(USB_LOG_MAGIC)
             debug_start = self.buffer.find(USB_DEBUG_MAGIC)
             dsp_start = self.buffer.find(USB_DSP_MAGIC)
-            starts = [value for value in (signal_start, log_start, debug_start, dsp_start) if value >= 0]
+            target_start = self.buffer.find(USB_TARGET_MAGIC)
+            starts = [value for value in (signal_start, log_start, debug_start, dsp_start, target_start) if value >= 0]
             if not starts:
                 self.buffer = self.buffer[-3:]
                 break
@@ -83,8 +89,28 @@ class UsbFrameParser:
                     "mfilt_us": int.from_bytes(self.buffer[24:28], "little"),
                     "send_us": int.from_bytes(self.buffer[28:32], "little"),
                     "accum_us": int.from_bytes(self.buffer[32:36], "little"),
+                    "detect_us": int.from_bytes(self.buffer[36:40], "little"),
                 })
                 del self.buffer[:USB_DSP_SIZE]
+                continue
+            if self.buffer.startswith(USB_TARGET_MAGIC):
+                if len(self.buffer) < USB_TARGET_HEADER_SIZE:
+                    break
+                target_count = int.from_bytes(self.buffer[4:6], "little")
+                total_tgt_size = USB_TARGET_HEADER_SIZE + target_count * USB_TARGET_ENTRY_SIZE
+                if len(self.buffer) < total_tgt_size:
+                    break
+                offset = USB_TARGET_HEADER_SIZE
+                for _ in range(target_count):
+                    range_m, strength_dbv, angle_deg, reserved, velocity_mps = struct.unpack_from("<ffhhf", self.buffer, offset)
+                    targets.append({
+                        "range": range_m,
+                        "strength": strength_dbv,
+                        "angle": angle_deg,
+                        "velocity": velocity_mps,
+                    })
+                    offset += USB_TARGET_ENTRY_SIZE
+                del self.buffer[:total_tgt_size]
                 continue
             if len(self.buffer) < USB_FRAME_HEADER_SIZE:
                 break
@@ -108,7 +134,7 @@ class UsbFrameParser:
             del self.buffer[:frame_size]
             frames.append((np.frombuffer(payload, dtype="<i2").astype(np.float32), receiver_id))
 
-        return frames, telemetry, debug, dsp
+        return frames, telemetry, debug, dsp, targets
 
 
 def find_stm32_port():
@@ -125,11 +151,11 @@ def find_stm32_port():
 
 class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int, int)
-    target_received = pyqtSignal(float, int, float, float, int)
+    target_received = pyqtSignal(float, int, float, float)
     status_changed = pyqtSignal(str)
     telemetry_received = pyqtSignal(int, int, int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
-    dsp_received = pyqtSignal(int, int, int, int, int, int, int, int)
+    dsp_received = pyqtSignal(int, int, int, int, int, int, int, int, int)
     bytes_received = pyqtSignal(int)
 
     def __init__(self, initial_configs=None):
@@ -167,7 +193,7 @@ class DataReceiver(QThread):
                     data = self.serial_port.read(8192)
                     if data:
                         self.bytes_received.emit(len(data))
-                    signal_frames, telemetry_frames, debug_frames, dsp_frames = parser.feed(data)
+                    signal_frames, telemetry_frames, debug_frames, dsp_frames, target_frames = parser.feed(data)
                     for samples, rx_id in signal_frames:
                         self.data_received.emit(samples, self.current_angle, rx_id)
                     for log in telemetry_frames:
@@ -191,7 +217,15 @@ class DataReceiver(QThread):
                             log["demod_us"],
                             log["mfilt_us"],
                             log["send_us"],
-                            log["accum_us"]
+                            log["accum_us"],
+                            log["detect_us"]
+                        )
+                    for tgt in target_frames:
+                        self.target_received.emit(
+                            tgt["range"],
+                            tgt["angle"],
+                            tgt["strength"],
+                            tgt["velocity"]
                         )
                 except (serial.SerialException, OSError) as error:
                     self.status_changed.emit(f"USB disconnected: {error}")

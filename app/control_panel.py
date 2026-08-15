@@ -22,9 +22,14 @@ class ControlPanel(QWidget):
         super().__init__(parent)
         self._is_paused = False
 
-        grid_layout = QGridLayout(self)
-        grid_layout.setContentsMargins(10, 5, 10, 5)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 5, 10, 5)
+        main_layout.setSpacing(6)
+
+        grid_layout = QGridLayout()
+        grid_layout.setContentsMargins(0, 0, 0, 0)
         grid_layout.setSpacing(8)
+        main_layout.addLayout(grid_layout)
 
         # USB device status/input placeholder
         self.ip_input = QLineEdit("USB auto-detect")
@@ -144,9 +149,14 @@ class ControlPanel(QWidget):
         capture_layout.addWidget(self.capture_next_btn)
         grid_layout.addLayout(capture_layout, 2, 4, 1, 2)
 
+        # Separate row for Target Info / Status Label to prevent grid column resizing
+        info_layout = QHBoxLayout()
+        info_layout.setContentsMargins(0, 2, 0, 0)
         self.info_label = QLabel("")
-        self.info_label.setStyleSheet("color: #8E8E93; font-style: italic; margin-right: 15px;")
-        grid_layout.addWidget(self.info_label, 2, 6)
+        self.info_label.setStyleSheet("color: #8E8E93; font-style: italic;")
+        info_layout.addWidget(self.info_label)
+        info_layout.addStretch(1)
+        main_layout.addLayout(info_layout)
 
     def update_status(self, status):
         if status.startswith("Connected"):

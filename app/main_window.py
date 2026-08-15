@@ -183,7 +183,7 @@ class SonarViewer(QMainWindow):
             f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n\n"
         )
 
-    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, accum_us):
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, accum_us, detect_us=0):
         self.telemetry_buffer.append(
             f"--- DSP Log #{format_vietnamese(sequence)} ---\n"
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
@@ -192,6 +192,7 @@ class SonarViewer(QMainWindow):
             f"IQ Demodulate: {format_vietnamese(demod_us)} us\n"
             f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
             f"Accumulate: {format_vietnamese(accum_us)} us\n"
+            f"Target Detect: {format_vietnamese(detect_us)} us\n"
             f"Send Data: {format_vietnamese(send_us)} us\n\n"
         )
 
@@ -424,33 +425,16 @@ class SonarViewer(QMainWindow):
         self.get_receiver().send_command(f"mode:{mode}")
         self.control_panel.info_label.setText(f"Mode command sent: mode:{mode}")
 
-    def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
+    def update_target(self, range_val, angle, strength, velocity):
         if self.is_paused:
-            return
-        channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
-        expected_rx = channel_map.get(self.control_panel.rx_select_combo.currentIndex(), 0)
-        if receiver_id != expected_rx:
             return
             
         angle_int = int(angle)
         clean_angle = angle_int & 0x7FFF
-
-        if not hasattr(self, '_smooth_velocity'):
-            self._smooth_velocity = {}
-        if receiver_id not in self._smooth_velocity:
-            self._smooth_velocity[receiver_id] = velocity
-        else:
-            self._smooth_velocity[receiver_id] = velocity
-            
-        disp_velocity = self._smooth_velocity[receiver_id]
+        disp_velocity = velocity
 
         self.radar_widget.add_target(range_val, clean_angle, strength, disp_velocity)
-        if receiver_id == 0:
-            self.control_panel.info_label.setText(f"Rx Sum Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
-        elif receiver_id == 3:
-            self.control_panel.info_label.setText(f"Rx Diff Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
-        else:
-            self.control_panel.info_label.setText(f"Rx {receiver_id} Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+        self.control_panel.info_label.setText(f"Target: {range_val:4.2f} m | Angle: {clean_angle:3d}° | Strength: {strength:5.1f} dBV | Velocity: {disp_velocity:+5.2f} m/s")
 
     def toggle_servo(self, state):
         self.radar_widget.servo_enabled = state
