@@ -183,7 +183,7 @@ class SonarViewer(QMainWindow):
             f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n\n"
         )
 
-    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us):
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, accum_us):
         self.telemetry_buffer.append(
             f"--- DSP Log #{format_vietnamese(sequence)} ---\n"
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
@@ -191,6 +191,7 @@ class SonarViewer(QMainWindow):
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
             f"IQ Demodulate: {format_vietnamese(demod_us)} us\n"
             f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
+            f"Accumulate: {format_vietnamese(accum_us)} us\n"
             f"Send Data: {format_vietnamese(send_us)} us\n\n"
         )
 

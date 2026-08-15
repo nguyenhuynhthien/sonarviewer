@@ -82,6 +82,7 @@ class UsbFrameParser:
                     "demod_us": int.from_bytes(self.buffer[20:24], "little"),
                     "mfilt_us": int.from_bytes(self.buffer[24:28], "little"),
                     "send_us": int.from_bytes(self.buffer[28:32], "little"),
+                    "accum_us": int.from_bytes(self.buffer[32:36], "little"),
                 })
                 del self.buffer[:USB_DSP_SIZE]
                 continue
@@ -128,7 +129,7 @@ class DataReceiver(QThread):
     status_changed = pyqtSignal(str)
     telemetry_received = pyqtSignal(int, int, int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
-    dsp_received = pyqtSignal(int, int, int, int, int, int, int)
+    dsp_received = pyqtSignal(int, int, int, int, int, int, int, int)
     bytes_received = pyqtSignal(int)
 
     def __init__(self, initial_configs=None):
@@ -189,7 +190,8 @@ class DataReceiver(QThread):
                             log["bpf_us"],
                             log["demod_us"],
                             log["mfilt_us"],
-                            log["send_us"]
+                            log["send_us"],
+                            log["accum_us"]
                         )
                 except (serial.SerialException, OSError) as error:
                     self.status_changed.emit(f"USB disconnected: {error}")
