@@ -17,15 +17,20 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
         return np.array([], dtype=np.float32)
         
     if receiver_id in (0, 3):
-        # Rx Sum (0) and Rx Diff (3) are always compressed magnitudes
-        return np.clip((samples / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
+        # Rx Sum (0) and Rx Diff (3) are average norms scaled by 1/2048. Reconstruct mags using sqrt.
+        mags = np.sqrt(np.clip(samples, 0.0, None) * 2048.0)
+        return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
     else:
         if stream_idx == 0:  # Raw
             return (samples / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_RAW_MULT + VOLTAGE_SCALE_RX_RAW_OFFSET
         elif stream_idx == 3:  # Compressed
-            return np.clip((samples / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
+            # Reconstruct magnitude from single-pulse norm (shifted by 12 on kit)
+            mags = np.sqrt(np.clip(samples, 0.0, None) * 4096.0)
+            return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
         else:  # Demodulated
-            return (samples / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_DEMOD_MULT
+            # Reconstruct magnitude from single-pulse norm (shifted by 12 on kit)
+            mags = np.sqrt(np.clip(samples, 0.0, None) * 4096.0)
+            return (mags / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_DEMOD_MULT
 
 def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
     """Calculate the signal-to-noise ratio (SNR) in dB using a CFAR-like window approach."""
