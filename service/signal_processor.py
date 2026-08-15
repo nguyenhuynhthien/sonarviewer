@@ -29,7 +29,7 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
 
 def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
     """Calculate the signal-to-noise ratio (SNR) in dB using a CFAR-like window approach."""
-    if len(voltages) <= ACTIVE_SIGNAL_START_IDX or not tx_on:
+    if len(voltages) <= ACTIVE_SIGNAL_START_IDX:
         return None
 
     active_voltages = voltages[ACTIVE_SIGNAL_START_IDX:]

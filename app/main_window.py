@@ -577,7 +577,7 @@ class SonarViewer(QMainWindow):
             tx_on = self.control_panel.tx_switch.isChecked()
             calibrated_snr = calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx)
             
-            if calibrated_snr is not None and calibrated_snr > 1.0:
+            if calibrated_snr is not None:
                 snr_str = f"SNR: {calibrated_snr:.1f} dB"
             else:
                 snr_str = "SNR: -- dB"
