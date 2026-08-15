@@ -4,7 +4,7 @@ import json
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QTabWidget, QScrollArea, QPlainTextEdit, QCheckBox
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
 from constants import (
@@ -93,12 +93,9 @@ class SonarViewer(QMainWindow):
         self.telemetry_autoscroll.setChecked(True)
         telemetry_layout.addWidget(self.telemetry_autoscroll)
         telemetry_layout.addWidget(self.telemetry_label, stretch=1)
-        telemetry_scroll = QScrollArea()
-        telemetry_scroll.setWidgetResizable(True)
-        telemetry_scroll.setWidget(telemetry_tab)
         self.signal_tabs = QTabWidget()
         self.signal_tabs.addTab(signal_tab, "Signal")
-        self.signal_tabs.addTab(telemetry_scroll, "Telemetry")
+        self.signal_tabs.addTab(telemetry_tab, "Telemetry")
         top_layout.addWidget(self.signal_tabs, stretch=2)
 
         # SNR Label overlaying the plot widget
@@ -141,6 +138,13 @@ class SonarViewer(QMainWindow):
         self.captured_pulses = []
         self.capture_current_idx = -1
 
+        # Buffer và Timer cho Telemetry để tránh giật lag UI và kẹt scrollbar
+        self.telemetry_buffer = []
+        self.telemetry_timer = QTimer(self)
+        self.telemetry_timer.setInterval(100)  # Cập nhật UI mỗi 100ms
+        self.telemetry_timer.timeout.connect(self.flush_telemetry)
+        self.telemetry_timer.start()
+
         # Khởi động Receiver
         self.get_receiver()
 
@@ -169,47 +173,34 @@ class SonarViewer(QMainWindow):
         self.control_panel.update_status(status)
 
     def update_telemetry(self, sequence, adc1_fs_hz, adc1_pri_us, adc2_fs_hz, adc2_pri_us, dac_fs_hz, dac_pri_us):
-        if self.telemetry_label.toPlainText() == "No telemetry received":
-            self.telemetry_label.clear()
-        self.telemetry_label.appendPlainText(
+        self.telemetry_buffer.append(
             f"Sequence: {format_vietnamese(sequence)}\n"
             f"ADC1 sampling rate: {format_vietnamese(adc1_fs_hz)} Hz\n"
             f"ADC1 PRI: {format_vietnamese(adc1_pri_us)} us\n"
             f"ADC2 sampling rate: {format_vietnamese(adc2_fs_hz)} Hz\n"
             f"ADC2 PRI: {format_vietnamese(adc2_pri_us)} us\n"
             f"DAC sampling rate: {format_vietnamese(dac_fs_hz)} Hz\n"
-            f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n"
+            f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n\n"
         )
-        if self.telemetry_autoscroll.isChecked():
-            self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
-            self.telemetry_label.ensureCursorVisible()
 
-    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, send_us):
-        if self.telemetry_label.toPlainText() == "No telemetry received":
-            self.telemetry_label.clear()
-        self.telemetry_label.appendPlainText(
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us):
+        self.telemetry_buffer.append(
             f"--- DSP Log #{format_vietnamese(sequence)} ---\n"
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
             f"Read ADC: {format_vietnamese(read_us)} us\n"
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
             f"IQ Demodulate: {format_vietnamese(demod_us)} us\n"
-            f"Send Data: {format_vietnamese(send_us)} us\n"
+            f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
+            f"Send Data: {format_vietnamese(send_us)} us\n\n"
         )
-        if self.telemetry_autoscroll.isChecked():
-            self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
-            self.telemetry_label.ensureCursorVisible()
 
     def update_debug(self, counter, tick_ms, adc_count, dac_count, timer_counter, timer_enabled, registers, diagnostics):
-        if self.telemetry_label.toPlainText() == "No telemetry received":
-            self.telemetry_label.clear()
-        self.telemetry_label.appendPlainText(
+        self.telemetry_buffer.append(
             f"USB heartbeat received\n"
             f"Debug counter: {format_vietnamese(counter)}\n"
             f"Firmware tick: {format_vietnamese(tick_ms)} ms\n\n"
             f"ADC DMA completed: {format_vietnamese(adc_count)}\n"
             f"DAC DMA completed: {format_vietnamese(dac_count)}\n\n"
-        )
-        self.telemetry_label.appendPlainText(
             f"TIM6 CNT: {format_vietnamese(timer_counter)}\n"
             f"TIM6 enabled: {timer_enabled}\n"
             f"ADC CR/CFGR/ISR: {[hex(value) for value in registers[:3]]}\n"
@@ -228,8 +219,21 @@ class SonarViewer(QMainWindow):
             f"DMA0 CTR3: {hex(diagnostics[3])}\n"
             f"ADC IER: {hex(diagnostics[4])}\n"
             f"ADC frame min/max: {[hex(value) for value in diagnostics[5:7]]}\n"
-            f"DMA0 CDAR/CLLR: {[hex(value) for value in diagnostics[7:8]]}\n"
+            f"DMA0 CDAR/CLLR: {[hex(value) for value in diagnostics[7:8]]}\n\n"
         )
+
+    def flush_telemetry(self):
+        if not self.telemetry_buffer:
+            return
+        
+        combined_text = "".join(self.telemetry_buffer)
+        self.telemetry_buffer.clear()
+
+        if self.telemetry_label.toPlainText() == "No telemetry received":
+            self.telemetry_label.clear()
+
+        self.telemetry_label.appendPlainText(combined_text)
+
         if self.telemetry_autoscroll.isChecked():
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
             self.telemetry_label.ensureCursorVisible()
@@ -336,7 +340,7 @@ class SonarViewer(QMainWindow):
         if rx_chan == 0:
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
         self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -353,7 +357,7 @@ class SonarViewer(QMainWindow):
             if rx_chan == 0:
                 default_y = PLOT_DEFAULT_Y_MAX_RX0
             else:
-                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
             self.current_y_max = default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -369,7 +373,7 @@ class SonarViewer(QMainWindow):
         if rx_chan == 0:
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
         self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
         if self.control_panel.autoscale_cb.isChecked():
             self._is_updating_plot = True

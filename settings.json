@@ -1,6 +1,6 @@
 {
-    "pulse_type": "Barker13",
-    "signal_type": 2,
+    "pulse_type": "Single",
+    "signal_type": 1,
     "tx_atten": "0 dB",
     "rx_channel": 1
 }
