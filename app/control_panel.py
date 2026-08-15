@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QCheckBox
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QCheckBox, QGridLayout
 from PyQt6.QtCore import pyqtSignal, Qt
 from app.toggle_switch import ToggleSwitch
 
@@ -22,14 +22,9 @@ class ControlPanel(QWidget):
         super().__init__(parent)
         self._is_paused = False
 
-        ctrl_layout = QVBoxLayout(self)
-        ctrl_layout.setContentsMargins(10, 5, 10, 5)
-        ctrl_layout.setSpacing(6)
-
-        row1_layout = QHBoxLayout()
-        row1_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        row2_layout = QHBoxLayout()
-        row2_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        grid_layout = QGridLayout(self)
+        grid_layout.setContentsMargins(10, 5, 10, 5)
+        grid_layout.setSpacing(8)
 
         # USB device status/input placeholder
         self.ip_input = QLineEdit("USB auto-detect")
@@ -117,41 +112,41 @@ class ControlPanel(QWidget):
         servo_layout.addWidget(self.servo_switch)
         servo_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        # Row 1 layout
-        row1_layout.addWidget(QLabel("STM32 USB:"))
-        row1_layout.addWidget(self.ip_input)
-        row1_layout.addWidget(self.pause_btn)
-        row1_layout.addWidget(self.single_btn)
-        row1_layout.addWidget(self.autoscale_cb)
-        row1_layout.addWidget(self.reset_zoom_btn)
-        row1_layout.addWidget(self.capture_btn)
-        row1_layout.addWidget(self.capture_prev_btn)
-        row1_layout.addWidget(self.capture_label)
-        row1_layout.addWidget(self.capture_next_btn)
-        row1_layout.addSpacing(15)
-        row1_layout.addWidget(tx_widget)
-        row1_layout.addSpacing(15)
-        row1_layout.addWidget(servo_widget)
-        
-        # Info Label
+        # Row 0: Connection & Main Controls
+        grid_layout.addWidget(QLabel("STM32 USB:"), 0, 0)
+        grid_layout.addWidget(self.ip_input, 0, 1)
+        grid_layout.addWidget(self.pause_btn, 0, 2)
+        grid_layout.addWidget(self.single_btn, 0, 3)
+        grid_layout.addWidget(self.status_label, 0, 4)
+        grid_layout.addWidget(tx_widget, 0, 5)
+        grid_layout.addWidget(servo_widget, 0, 6)
+
+        # Row 1: Configurations part 1
+        grid_layout.addWidget(QLabel("Rx Select:"), 1, 0)
+        grid_layout.addWidget(self.rx_select_combo, 1, 1)
+        grid_layout.addWidget(QLabel("Pulse Type:"), 1, 2)
+        grid_layout.addWidget(self.pulse_type_combo, 1, 3)
+        grid_layout.addWidget(self.autoscale_cb, 1, 4)
+        grid_layout.addWidget(self.reset_zoom_btn, 1, 5)
+
+        # Row 2: Configurations part 2 & Capture
+        grid_layout.addWidget(QLabel("Signal Stream:"), 2, 0)
+        grid_layout.addWidget(self.signal_type_combo, 2, 1)
+        grid_layout.addWidget(QLabel("Tx Attenuation:"), 2, 2)
+        grid_layout.addWidget(self.tx_atten_combo, 2, 3)
+
+        capture_layout = QHBoxLayout()
+        capture_layout.setContentsMargins(0, 0, 0, 0)
+        capture_layout.setSpacing(5)
+        capture_layout.addWidget(self.capture_btn)
+        capture_layout.addWidget(self.capture_prev_btn)
+        capture_layout.addWidget(self.capture_label)
+        capture_layout.addWidget(self.capture_next_btn)
+        grid_layout.addLayout(capture_layout, 2, 4, 1, 2)
+
         self.info_label = QLabel("")
         self.info_label.setStyleSheet("color: #8E8E93; font-style: italic; margin-right: 15px;")
-
-        # Row 2 layout
-        row2_layout.addWidget(QLabel("Rx Select:"))
-        row2_layout.addWidget(self.rx_select_combo)
-        row2_layout.addWidget(QLabel("Pulse Type:"))
-        row2_layout.addWidget(self.pulse_type_combo)
-        row2_layout.addWidget(QLabel("Signal Stream:"))
-        row2_layout.addWidget(self.signal_type_combo)
-        row2_layout.addWidget(QLabel("Tx Attenuation:"))
-        row2_layout.addWidget(self.tx_atten_combo)
-        row2_layout.addStretch()
-        row2_layout.addWidget(self.info_label)
-        row2_layout.addWidget(self.status_label)
-
-        ctrl_layout.addLayout(row1_layout)
-        ctrl_layout.addLayout(row2_layout)
+        grid_layout.addWidget(self.info_label, 2, 6)
 
     def update_status(self, status):
         if status.startswith("Connected"):

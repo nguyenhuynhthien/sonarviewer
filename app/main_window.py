@@ -37,7 +37,7 @@ class SonarViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SonarViewer GUI")
-        self.showMaximized()
+        self.resize(1280, 800)
         self.current_y_max = 0.01
         self.current_y_max0 = 0.01
         self.latest_voltages = None
