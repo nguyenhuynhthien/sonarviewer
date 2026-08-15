@@ -1,6 +1,6 @@
 {
     "pulse_type": "Single",
-    "signal_type": 1,
+    "signal_type": 3,
     "tx_atten": "0 dB",
-    "rx_channel": 1
+    "rx_channel": 0
 }

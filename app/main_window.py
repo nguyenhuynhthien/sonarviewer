@@ -290,15 +290,32 @@ class SonarViewer(QMainWindow):
         
         # 6. Rx Select Channel
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
-        self.get_receiver().send_command(f"rx_select:{rx_chan}")
+        channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
+        actual_rx = channel_map.get(rx_chan, 0)
+        self.get_receiver().send_command(f"rx_select:{actual_rx}")
         
         self.control_panel.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd} | rx_select:{rx_chan}")
 
     def change_rx_channel(self, rx_chan):
-        if rx_chan == 0:
-            title = "Rx 0 (Sum Channel) Received Signal"
+        # Map combo index to actual channel ID
+        channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
+        actual_rx = channel_map.get(rx_chan, 0)
+
+        # Enforce Compressed stream mode for Rx Sum (0) and Rx Diff (3)
+        if actual_rx in (0, 3):
+            self.control_panel.signal_type_combo.setCurrentIndex(3) # Compressed
+            self.control_panel.signal_type_combo.setEnabled(False)
+            self.get_receiver().send_command("mode:compressed")
+        else:
+            self.control_panel.signal_type_combo.setEnabled(True)
+
+        if actual_rx == 0:
+            title = "Rx Sum Received Signal"
             pen_color = 'c'
-        elif rx_chan == 1:
+        elif actual_rx == 3:
+            title = "Rx Diff Received Signal"
+            pen_color = 'g'
+        elif actual_rx == 1:
             title = "Rx 1 (GPIO 32) Received Signal"
             pen_color = 'y'
         else:
@@ -309,7 +326,7 @@ class SonarViewer(QMainWindow):
         self.curve.setPen(pg.mkPen(pen_color, width=1.5))
         
         idx = self.control_panel.signal_type_combo.currentIndex()
-        if rx_chan == 0:
+        if actual_rx in (0, 3):
             y_lim = PLOT_Y_MAX_RX0
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
@@ -324,8 +341,8 @@ class SonarViewer(QMainWindow):
             self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
             self._is_updating_plot = False
 
-        self.get_receiver().send_command(f"rx_select:{rx_chan}")
-        self.control_panel.info_label.setText(f"Rx channel select command sent: rx_select:{rx_chan}")
+        self.get_receiver().send_command(f"rx_select:{actual_rx}")
+        self.control_panel.info_label.setText(f"Rx channel select command sent: rx_select:{actual_rx}")
 
     def _on_plot_range_changed(self):
         if not self._is_updating_plot:
@@ -337,7 +354,8 @@ class SonarViewer(QMainWindow):
     def reset_zoom(self):
         idx = self.control_panel.signal_type_combo.currentIndex()
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
-        if rx_chan == 0:
+        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
+        if actual_rx in (0, 3):
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
@@ -354,7 +372,8 @@ class SonarViewer(QMainWindow):
         else:
             idx = self.control_panel.signal_type_combo.currentIndex()
             rx_chan = self.control_panel.rx_select_combo.currentIndex()
-            if rx_chan == 0:
+            actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
+            if actual_rx in (0, 3):
                 default_y = PLOT_DEFAULT_Y_MAX_RX0
             else:
                 default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
@@ -370,7 +389,8 @@ class SonarViewer(QMainWindow):
         self.control_panel.info_label.setText(f"Config sent: {pulse_type}")
         idx = self.control_panel.signal_type_combo.currentIndex()
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
-        if rx_chan == 0:
+        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
+        if actual_rx in (0, 3):
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
             default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
@@ -382,10 +402,11 @@ class SonarViewer(QMainWindow):
 
     def change_signal_type(self, idx):
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
+        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
         modes = ["raw", "bpf", "demod", "compressed"]
         mode = modes[idx] if idx < len(modes) else "raw"
 
-        if rx_chan == 0:
+        if actual_rx in (0, 3):
             y_lim = PLOT_Y_MAX_RX0
             default_y = PLOT_DEFAULT_Y_MAX_RX0
         else:
@@ -405,7 +426,9 @@ class SonarViewer(QMainWindow):
     def update_target(self, range_val, angle, strength, velocity, receiver_id=0):
         if self.is_paused:
             return
-        if receiver_id != self.control_panel.rx_select_combo.currentIndex():
+        channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
+        expected_rx = channel_map.get(self.control_panel.rx_select_combo.currentIndex(), 0)
+        if receiver_id != expected_rx:
             return
             
         angle_int = int(angle)
@@ -422,7 +445,9 @@ class SonarViewer(QMainWindow):
 
         self.radar_widget.add_target(range_val, clean_angle, strength, disp_velocity)
         if receiver_id == 0:
-            self.control_panel.info_label.setText(f"Sum Channel Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+            self.control_panel.info_label.setText(f"Rx Sum Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
+        elif receiver_id == 3:
+            self.control_panel.info_label.setText(f"Rx Diff Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
         else:
             self.control_panel.info_label.setText(f"Rx {receiver_id} Target: {range_val:.2f} m | Angle: {clean_angle}° | Strength: {strength:.1f} dBV | Velocity: {disp_velocity:+.2f} m/s")
 
@@ -489,7 +514,7 @@ class SonarViewer(QMainWindow):
         receiver_id = pulse['receiver_id']
         angle = pulse['angle']
         shifted_voltages = pulse['shifted_voltages']
-        if receiver_id == 0:
+        if receiver_id in (0, 3):
             self.radar_widget.set_data(angle, shifted_voltages)
         else:
             self.radar_widget.set_angle(angle)
@@ -499,7 +524,7 @@ class SonarViewer(QMainWindow):
         
         # Update control panel browse label
         self.control_panel.set_capture_browse(idx + 1, len(self.captured_pulses))
-
+ 
         # Peak Hold Auto Scale for captured pulse
         if self.control_panel.autoscale_cb.isChecked() and len(pulse['voltages']) > ACTIVE_SIGNAL_START_IDX:
             active_voltages = pulse['voltages'][ACTIVE_SIGNAL_START_IDX:]
@@ -507,7 +532,7 @@ class SonarViewer(QMainWindow):
             if len(valid_samples) > 0:
                 peak = np.max(valid_samples)
                 if np.isfinite(peak):
-                    max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id == 0 or pulse['stream_idx'] == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                    max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or pulse['stream_idx'] == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                     target_y_max = min(max(peak * 1.15, 0.01), max_cap)
                     if target_y_max > self.current_y_max:
                         self.current_y_max = target_y_max
@@ -534,13 +559,19 @@ class SonarViewer(QMainWindow):
 
         if self.is_paused:
             return
+
+        # Check expected rx channel
+        channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
+        expected_rx = channel_map.get(self.control_panel.rx_select_combo.currentIndex(), 0)
+        if receiver_id != expected_rx:
+            return
             
         if len(samples) > 0:
             stream_idx = self.control_panel.signal_type_combo.currentIndex()
             voltages = convert_samples_to_voltages(samples, receiver_id, stream_idx)
             self.latest_voltages = voltages
             display_voltages = voltages
-
+ 
             # Calculate SNR
             pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
             tx_on = self.control_panel.tx_switch.isChecked()
@@ -550,7 +581,7 @@ class SonarViewer(QMainWindow):
                 snr_str = f"SNR: {calibrated_snr:.1f} dB"
             else:
                 snr_str = "SNR: -- dB"
-
+ 
             self.snr_label.setText(snr_str)
             
             # Shift voltages to align radar history
@@ -578,7 +609,7 @@ class SonarViewer(QMainWindow):
                     self.control_panel.set_paused_state(True)
                     return  # Stop processing further for this pulse update
             
-            if receiver_id == 0:
+            if receiver_id in (0, 3):
                 self.radar_widget.set_data(angle, shifted_voltages)
                 self.curve.setData(display_voltages)
             elif receiver_id == 1:
@@ -594,9 +625,9 @@ class SonarViewer(QMainWindow):
                 if len(valid_samples) > 0:
                     peak = np.max(valid_samples)
                     if np.isfinite(peak):
-                        max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id == 0 or stream_idx == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                        max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or stream_idx == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                         target_y_max = min(max(peak * 1.15, 0.01), max_cap)
-                        if receiver_id == 0:
+                        if receiver_id in (0, 3):
                             target_y_max = max(target_y_max, 0.05)
                         if target_y_max > self.current_y_max:
                             self.current_y_max = target_y_max

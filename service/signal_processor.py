@@ -16,9 +16,9 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
     if len(samples) == 0:
         return np.array([], dtype=np.float32)
         
-    if receiver_id == 0:
-        # STM32 ADCService sends unsigned 12-bit ADC samples, not Q15 data.
-        return (np.clip(samples, 0.0, 4095.0) / 4095.0) * 3.3
+    if receiver_id in (0, 3):
+        # Rx Sum (0) and Rx Diff (3) are always compressed magnitudes
+        return np.clip((samples / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
     else:
         if stream_idx == 0:  # Raw
             return (samples / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_RAW_MULT + VOLTAGE_SCALE_RX_RAW_OFFSET
@@ -77,7 +77,7 @@ def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
         raw_snr = 20 * np.log10(signal_peak / noise_rms)
         
         # Calibrate out the peak selection bias
-        is_compressed = (receiver_id == 0) or (stream_idx == 3)
+        is_compressed = (receiver_id in (0, 3)) or (stream_idx == 3)
         bias = BIAS_COMPRESSED if is_compressed else BIAS_RAW_DEMOD
         
         calibrated_snr = raw_snr - bias

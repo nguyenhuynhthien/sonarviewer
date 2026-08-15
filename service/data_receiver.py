@@ -88,8 +88,8 @@ class UsbFrameParser:
             if len(self.buffer) < USB_FRAME_HEADER_SIZE:
                 break
 
-            # Verify it's followed by '1' or '2'
-            if self.buffer[3] not in (0x31, 0x32):  # ASCII '1' or '2'
+            # Verify it's followed by '0', '1', '2' or '3'
+            if self.buffer[3] not in (0x30, 0x31, 0x32, 0x33):  # ASCII '0', '1', '2', '3'
                 del self.buffer[:3]
                 continue
 
@@ -102,9 +102,10 @@ class UsbFrameParser:
             if len(self.buffer) < frame_size:
                 break
 
+            receiver_id = self.buffer[3] - 0x30
             payload = bytes(self.buffer[USB_FRAME_HEADER_SIZE:frame_size])
             del self.buffer[:frame_size]
-            frames.append(np.frombuffer(payload, dtype="<i2").astype(np.float32))
+            frames.append((np.frombuffer(payload, dtype="<i2").astype(np.float32), receiver_id))
 
         return frames, telemetry, debug, dsp
 
@@ -166,8 +167,8 @@ class DataReceiver(QThread):
                     if data:
                         self.bytes_received.emit(len(data))
                     signal_frames, telemetry_frames, debug_frames, dsp_frames = parser.feed(data)
-                    for samples in signal_frames:
-                        self.data_received.emit(samples, self.current_angle, 0)
+                    for samples, rx_id in signal_frames:
+                        self.data_received.emit(samples, self.current_angle, rx_id)
                     for log in telemetry_frames:
                         self.telemetry_received.emit(
                             log["sequence"],

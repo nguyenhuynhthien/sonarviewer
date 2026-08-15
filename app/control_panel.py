@@ -57,7 +57,7 @@ class ControlPanel(QWidget):
         self.tx_atten_combo.activated.connect(self._on_tx_atten_activated)
 
         self.rx_select_combo = QComboBox()
-        self.rx_select_combo.addItems(["Rx 0 (Sum Channel)", "Rx 1 (GPIO 32)", "Rx 2 (GPIO 33)"])
+        self.rx_select_combo.addItems(["Rx Sum", "Rx Diff", "Rx 1 (GPIO 32)", "Rx 2 (GPIO 33)"])
         self.rx_select_combo.activated.connect(self.rx_channel_changed.emit)
 
         # Autoscale Checkbox
