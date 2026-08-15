@@ -184,7 +184,7 @@ class SonarViewer(QMainWindow):
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
             self.telemetry_label.ensureCursorVisible()
 
-    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, send_us):
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, send_us):
         if self.telemetry_label.toPlainText() == "No telemetry received":
             self.telemetry_label.clear()
         self.telemetry_label.appendPlainText(
@@ -192,6 +192,7 @@ class SonarViewer(QMainWindow):
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
             f"Read ADC: {format_vietnamese(read_us)} us\n"
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
+            f"IQ Demodulate: {format_vietnamese(demod_us)} us\n"
             f"Send Data: {format_vietnamese(send_us)} us\n"
         )
         if self.telemetry_autoscroll.isChecked():
