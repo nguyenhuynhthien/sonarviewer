@@ -50,7 +50,7 @@ class ControlPanel(QWidget):
 
         # ComboBoxes
         self.pulse_type_combo = QComboBox()
-        self.pulse_type_combo.addItems(["Single", "Barker13"])
+        self.pulse_type_combo.addItems(["Single", "LFM"])
         self.pulse_type_combo.activated.connect(self._on_pulse_type_activated)
 
         self.signal_type_combo = QComboBox()

@@ -27,14 +27,16 @@ MAX_SAMPLES = 2048
 MAX_RANGE = (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS)
 
 # Filter lengths (in samples) to correct for filter group delays
-FILTER_LEN_BARKER13 = 104
+FILTER_LEN_LFM = 320
+FILTER_LEN_BARKER13 = 320  # Backwards compatibility alias
 FILTER_LEN_SINGLE = 8
 
 # CFAR & SNR parameters
 ACTIVE_SIGNAL_START_IDX = 120
 SMOOTHING_WINDOW_SIZE = 5
 CFAR_CUT_SIZE = 7
-CFAR_GUARD_SIZE_BARKER13 = 52
+CFAR_GUARD_SIZE_LFM = 160
+CFAR_GUARD_SIZE_BARKER13 = 160  # Backwards compatibility alias
 CFAR_GUARD_SIZE_SINGLE = 16
 
 # SNR calibration biases

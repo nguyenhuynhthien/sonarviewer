@@ -1,13 +1,14 @@
 import numpy as np
 from constants import (
+    FS,
     VOLTAGE_SCALE_RX0, Q15_MAX_VAL_RX0, Q15_MAX_VAL_RX12,
     VOLTAGE_SCALE_RX_RAW_OFFSET, VOLTAGE_SCALE_RX_RAW_MULT,
     VOLTAGE_SCALE_RX_DEMOD_MULT, VOLTAGE_SCALE_RX_COMPRESSED_MULT,
     VOLTAGE_CLIP_RX_COMPRESSED, COMPRESSED_MAX_VAL,
     ACTIVE_SIGNAL_START_IDX, SMOOTHING_WINDOW_SIZE,
-    CFAR_CUT_SIZE, CFAR_GUARD_SIZE_BARKER13, CFAR_GUARD_SIZE_SINGLE,
+    CFAR_CUT_SIZE, CFAR_GUARD_SIZE_LFM, CFAR_GUARD_SIZE_BARKER13, CFAR_GUARD_SIZE_SINGLE,
     BIAS_COMPRESSED, BIAS_RAW_DEMOD,
-    FILTER_LEN_BARKER13, FILTER_LEN_SINGLE,
+    FILTER_LEN_LFM, FILTER_LEN_BARKER13, FILTER_LEN_SINGLE,
     DOWNSAMPLE_FACTOR
 )
 
@@ -21,8 +22,8 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
         mags = np.sqrt(np.clip(samples, 0.0, None) * 2048.0)
         return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
     else:
-        if stream_idx == 0:  # Raw
-            return (samples / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_RAW_MULT + VOLTAGE_SCALE_RX_RAW_OFFSET
+        if stream_idx in (0, 1):  # Raw or BPF
+            return (samples / 4096.0) * 3.3
         elif stream_idx == 3:  # Compressed
             # Reconstruct magnitude from single-pulse norm (shifted by 12 on kit)
             mags = np.sqrt(np.clip(samples, 0.0, None) * 4096.0)
@@ -47,9 +48,9 @@ def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
     peak_idx = ACTIVE_SIGNAL_START_IDX + peak_idx_active
     
     # Define CFAR-like window parameters
-    if pulse_type == 'barker13':
+    if pulse_type in ('lfm', 'barker13'):
         cut_size = CFAR_CUT_SIZE
-        guard_size = CFAR_GUARD_SIZE_BARKER13
+        guard_size = CFAR_GUARD_SIZE_LFM
     else:
         cut_size = CFAR_CUT_SIZE
         guard_size = CFAR_GUARD_SIZE_SINGLE
@@ -91,7 +92,7 @@ def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
 
 def shift_voltages(voltages, pulse_type):
     """Shift voltages to align radar history with the target distance (correcting for filter delay)."""
-    filter_len = FILTER_LEN_BARKER13 if pulse_type == 'barker13' else FILTER_LEN_SINGLE
+    filter_len = FILTER_LEN_LFM if pulse_type in ('lfm', 'barker13') else FILTER_LEN_SINGLE
     if len(voltages) <= filter_len:
         return voltages
         
@@ -114,3 +115,26 @@ def process_radar_intensities(samples, pulse_type):
     max_val = np.max(downsampled) if np.max(downsampled) > 0 else 1.0
     normalized = downsampled / max_val
     return normalized
+
+def compute_spectrum(voltages, fs=FS):
+    """Compute single-sided FFT magnitude spectrum of the given voltage signal.
+    Returns:
+        freqs_khz (np.ndarray): Frequency array in kHz (from 0 to Fs/2 / 1000).
+        magnitudes (np.ndarray): Magnitude spectrum in Volts.
+    """
+    if len(voltages) == 0:
+        return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+        
+    n = len(voltages)
+    # Remove DC component / baseline to avoid DC peak
+    baseline = np.median(voltages)
+    ac_signal = voltages - baseline
+    
+    # Direct FFT without full-buffer tapering window to preserve true symmetric LFM chirp spectrum
+    fft_result = np.fft.rfft(ac_signal)
+    freqs_khz = np.fft.rfftfreq(n, d=1.0 / fs) / 1000.0  # in kHz
+    
+    # Scale magnitude to physical voltage amplitude
+    magnitudes = (2.0 / n) * np.abs(fft_result)
+    
+    return freqs_khz, magnitudes

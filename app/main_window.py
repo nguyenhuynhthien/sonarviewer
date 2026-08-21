@@ -16,8 +16,9 @@ from constants import (
 from app.custom_zoom_viewbox import CustomZoomViewBox
 from app.radar_widget import RadarWidget
 from app.control_panel import ControlPanel
+from app.toggle_switch import ToggleSwitch
 from service.data_receiver import DataReceiver
-from service.signal_processor import convert_samples_to_voltages, calculate_snr, shift_voltages
+from service.signal_processor import convert_samples_to_voltages, calculate_snr, shift_voltages, compute_spectrum
 
 
 def format_vietnamese(value, precision=0):
@@ -41,6 +42,8 @@ class SonarViewer(QMainWindow):
         self.current_y_max = 0.01
         self.current_y_max0 = 0.01
         self.latest_voltages = None
+        self.latest_snr_str = "SNR: -- dB"
+        self.is_spectrum_mode = False
         self._last_sent_servo_angle = -1
 
         # Layout chính dạng dọc
@@ -59,9 +62,26 @@ class SonarViewer(QMainWindow):
         self.radar_widget.angle_requested.connect(self.send_servo_angle)
         top_layout.addWidget(self.radar_widget, stretch=2)
 
-        # Đồ thị tín hiệu miền thời gian bên phải
+        # Đồ thị tín hiệu bên phải
         right_layout = QVBoxLayout()
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(6)
+
+        # Thanh chuyển đổi chế độ đồ thị (Time Domain / Spectrum FFT)
+        plot_header_layout = QHBoxLayout()
+        plot_header_layout.setContentsMargins(4, 0, 4, 0)
+        
+        spectrum_title = QLabel("Spectrum (FFT):")
+        spectrum_title.setStyleSheet("color: #000000; font-size: 13px; font-weight: bold; margin-right: 4px;")
+        
+        self.spectrum_switch = ToggleSwitch()
+        self.spectrum_switch.setToolTip("Bật/tắt hiển thị phổ tần số FFT của tín hiệu")
+        self.spectrum_switch.clicked.connect(self.toggle_spectrum)
+        
+        plot_header_layout.addStretch(1)
+        plot_header_layout.addWidget(spectrum_title)
+        plot_header_layout.addWidget(self.spectrum_switch)
+        
+        right_layout.addLayout(plot_header_layout)
 
         self.plot_widget = pg.PlotWidget(title="Rx 0 (Sum Channel) Received Signal", viewBox=CustomZoomViewBox())
         self.plot_widget.getViewBox().setMouseEnabled(x=True, y=True)
@@ -298,6 +318,76 @@ class SonarViewer(QMainWindow):
         
         self.control_panel.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd} | rx_select:{rx_chan}")
 
+    def update_plot_style(self):
+        rx_chan = self.control_panel.rx_select_combo.currentIndex()
+        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
+        idx = self.control_panel.signal_type_combo.currentIndex()
+
+        if actual_rx == 0:
+            base_title = "Rx Sum Received Signal"
+            pen_color = 'c'
+        elif actual_rx == 3:
+            base_title = "Rx Diff Received Signal"
+            pen_color = 'g'
+        elif actual_rx == 1:
+            base_title = "Rx 1 (GPIO 32) Received Signal"
+            pen_color = 'y'
+        else:
+            base_title = "Rx 2 (GPIO 33) Received Signal"
+            pen_color = 'm'
+
+        self.curve.setPen(pg.mkPen(pen_color, width=1.5))
+
+        if self.is_spectrum_mode:
+            self.plot_widget.setTitle(f"{base_title} - Frequency Spectrum (FFT)")
+            self.plot_widget.setLabel('left', 'Magnitude', units='V')
+            self.plot_widget.setLabel('bottom', 'Frequency', units='kHz')
+            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=80.0, yMin=0, yMax=10.0, minXRange=0, minYRange=0)
+            self._is_updating_plot = True
+            self.plot_widget.setXRange(0, 80.0, padding=0)
+            default_y = 0.5
+            self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
+            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+            self._is_updating_plot = False
+        else:
+            self.plot_widget.setTitle(base_title)
+            self.plot_widget.setLabel('left', 'Voltage', units='V')
+            self.plot_widget.setLabel('bottom', 'Sample Index')
+
+            if actual_rx in (0, 3):
+                y_lim = PLOT_Y_MAX_RX0
+                default_y = PLOT_DEFAULT_Y_MAX_RX0
+            else:
+                y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_Y_MAX_RX12_RAW_DEMOD
+                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+
+            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
+            self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
+            self._is_updating_plot = True
+            self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
+            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+            self._is_updating_plot = False
+
+    def toggle_spectrum(self):
+        self.is_spectrum_mode = self.spectrum_switch.isChecked()
+        self.update_plot_style()
+        if self.latest_voltages is not None and len(self.latest_voltages) > 0:
+            if self.is_spectrum_mode:
+                freqs, mags = compute_spectrum(self.latest_voltages)
+                self.curve.setData(freqs, mags)
+                if len(mags) > 0:
+                    peak_idx = np.argmax(mags)
+                    self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
+                    if self.control_panel.autoscale_cb.isChecked():
+                        target_y_max = max(float(mags[peak_idx]) * 1.25, 0.005)
+                        self.current_y_max = target_y_max
+                        self._is_updating_plot = True
+                        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                        self._is_updating_plot = False
+            else:
+                self.curve.setData(self.latest_voltages)
+                self.snr_label.setText(self.latest_snr_str)
+
     def change_rx_channel(self, rx_chan):
         # Map combo index to actual channel ID
         channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
@@ -311,38 +401,7 @@ class SonarViewer(QMainWindow):
         else:
             self.control_panel.signal_type_combo.setEnabled(True)
 
-        if actual_rx == 0:
-            title = "Rx Sum Received Signal"
-            pen_color = 'c'
-        elif actual_rx == 3:
-            title = "Rx Diff Received Signal"
-            pen_color = 'g'
-        elif actual_rx == 1:
-            title = "Rx 1 (GPIO 32) Received Signal"
-            pen_color = 'y'
-        else:
-            title = "Rx 2 (GPIO 33) Received Signal"
-            pen_color = 'm'
-            
-        self.plot_widget.setTitle(title)
-        self.curve.setPen(pg.mkPen(pen_color, width=1.5))
-        
-        idx = self.control_panel.signal_type_combo.currentIndex()
-        if actual_rx in (0, 3):
-            y_lim = PLOT_Y_MAX_RX0
-            default_y = PLOT_DEFAULT_Y_MAX_RX0
-        else:
-            y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_Y_MAX_RX12_RAW_DEMOD
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-            
-        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
-        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
-        if self.control_panel.autoscale_cb.isChecked():
-            self._is_updating_plot = True
-            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-            self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
-            self._is_updating_plot = False
-
+        self.update_plot_style()
         self.get_receiver().send_command(f"rx_select:{actual_rx}")
         self.control_panel.info_label.setText(f"Rx channel select command sent: rx_select:{actual_rx}")
 
@@ -354,31 +413,23 @@ class SonarViewer(QMainWindow):
                 self.control_panel.autoscale_cb.blockSignals(False)
 
     def reset_zoom(self):
-        idx = self.control_panel.signal_type_combo.currentIndex()
-        rx_chan = self.control_panel.rx_select_combo.currentIndex()
-        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
-        if actual_rx in (0, 3):
-            default_y = PLOT_DEFAULT_Y_MAX_RX0
-        else:
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
-        self._is_updating_plot = True
-        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-        self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
-        self._is_updating_plot = False
+        self.update_plot_style()
         self.radar_widget.reset_zoom()
 
     def toggle_autoscale_cb(self, checked):
         if checked:
             self.current_y_max = 0.01
         else:
-            idx = self.control_panel.signal_type_combo.currentIndex()
-            rx_chan = self.control_panel.rx_select_combo.currentIndex()
-            actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
-            if actual_rx in (0, 3):
-                default_y = PLOT_DEFAULT_Y_MAX_RX0
+            if self.is_spectrum_mode:
+                default_y = 0.5
             else:
-                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                idx = self.control_panel.signal_type_combo.currentIndex()
+                rx_chan = self.control_panel.rx_select_combo.currentIndex()
+                actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
+                if actual_rx in (0, 3):
+                    default_y = PLOT_DEFAULT_Y_MAX_RX0
+                else:
+                    default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
             self.current_y_max = default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -389,39 +440,12 @@ class SonarViewer(QMainWindow):
         self.get_receiver().pulse_type = pulse_type
         self.get_receiver().send_command(f"cfg:{pulse_type}")
         self.control_panel.info_label.setText(f"Config sent: {pulse_type}")
-        idx = self.control_panel.signal_type_combo.currentIndex()
-        rx_chan = self.control_panel.rx_select_combo.currentIndex()
-        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
-        if actual_rx in (0, 3):
-            default_y = PLOT_DEFAULT_Y_MAX_RX0
-        else:
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
-        if self.control_panel.autoscale_cb.isChecked():
-            self._is_updating_plot = True
-            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-            self._is_updating_plot = False
+        self.update_plot_style()
 
     def change_signal_type(self, idx):
-        rx_chan = self.control_panel.rx_select_combo.currentIndex()
-        actual_rx = {0: 0, 1: 3, 2: 1, 3: 2}.get(rx_chan, 0)
         modes = ["raw", "bpf", "demod", "compressed"]
         mode = modes[idx] if idx < len(modes) else "raw"
-
-        if actual_rx in (0, 3):
-            y_lim = PLOT_Y_MAX_RX0
-            default_y = PLOT_DEFAULT_Y_MAX_RX0
-        else:
-            y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_Y_MAX_RX12_RAW_DEMOD
-            default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-        
-        self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
-        self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
-        
-        if self.control_panel.autoscale_cb.isChecked():
-            self._is_updating_plot = True
-            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-            self._is_updating_plot = False
+        self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
         self.control_panel.info_label.setText(f"Mode command sent: mode:{mode}")
 
@@ -488,12 +512,38 @@ class SonarViewer(QMainWindow):
             return
         self.capture_current_idx = idx
         pulse = self.captured_pulses[idx]
+        voltages = pulse['voltages']
         
-        # Update curve
-        self.curve.setData(pulse['voltages'])
-        
-        # Update SNR
-        self.snr_label.setText(pulse['snr_str'])
+        # Update curve and label
+        if self.is_spectrum_mode:
+            freqs, mags = compute_spectrum(voltages)
+            self.curve.setData(freqs, mags)
+            if len(mags) > 0:
+                peak_idx = np.argmax(mags)
+                self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
+                if self.control_panel.autoscale_cb.isChecked():
+                    target_y_max = max(float(mags[peak_idx]) * 1.25, 0.005)
+                    self.current_y_max = target_y_max
+                    self._is_updating_plot = True
+                    self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                    self._is_updating_plot = False
+        else:
+            self.curve.setData(voltages)
+            self.snr_label.setText(pulse['snr_str'])
+            # Peak Hold Auto Scale for captured pulse
+            if self.control_panel.autoscale_cb.isChecked() and len(voltages) > ACTIVE_SIGNAL_START_IDX:
+                active_voltages = voltages[ACTIVE_SIGNAL_START_IDX:]
+                valid_samples = active_voltages[np.isfinite(active_voltages)]
+                if len(valid_samples) > 0:
+                    peak = np.max(valid_samples)
+                    if np.isfinite(peak):
+                        max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (pulse['receiver_id'] in (0, 3) or pulse['stream_idx'] == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                        target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                        if target_y_max > self.current_y_max:
+                            self.current_y_max = target_y_max
+                            self._is_updating_plot = True
+                            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                            self._is_updating_plot = False
         
         # Update radar widget
         receiver_id = pulse['receiver_id']
@@ -509,21 +559,6 @@ class SonarViewer(QMainWindow):
         
         # Update control panel browse label
         self.control_panel.set_capture_browse(idx + 1, len(self.captured_pulses))
- 
-        # Peak Hold Auto Scale for captured pulse
-        if self.control_panel.autoscale_cb.isChecked() and len(pulse['voltages']) > ACTIVE_SIGNAL_START_IDX:
-            active_voltages = pulse['voltages'][ACTIVE_SIGNAL_START_IDX:]
-            valid_samples = active_voltages[np.isfinite(active_voltages)]
-            if len(valid_samples) > 0:
-                peak = np.max(valid_samples)
-                if np.isfinite(peak):
-                    max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or pulse['stream_idx'] == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-                    target_y_max = min(max(peak * 1.15, 0.01), max_cap)
-                    if target_y_max > self.current_y_max:
-                        self.current_y_max = target_y_max
-                        self._is_updating_plot = True
-                        self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-                        self._is_updating_plot = False
 
     def prev_captured_pulse(self):
         if not self.in_capture_browse_mode or not self.captured_pulses:
@@ -566,8 +601,7 @@ class SonarViewer(QMainWindow):
                 snr_str = f"SNR: {calibrated_snr:.1f} dB"
             else:
                 snr_str = "SNR: -- dB"
- 
-            self.snr_label.setText(snr_str)
+            self.latest_snr_str = snr_str
             
             # Shift voltages to align radar history
             shifted_voltages = shift_voltages(voltages, pulse_type)
@@ -596,29 +630,44 @@ class SonarViewer(QMainWindow):
             
             if receiver_id in (0, 3):
                 self.radar_widget.set_data(angle, shifted_voltages)
-                self.curve.setData(display_voltages)
-            elif receiver_id == 1:
+            else:
                 self.radar_widget.set_angle(angle)
-                self.curve.setData(voltages)
-            elif receiver_id == 2:
-                self.curve.setData(voltages)
             
-            # Peak Hold Auto Scale
-            if self.control_panel.autoscale_cb.isChecked() and len(display_voltages) > ACTIVE_SIGNAL_START_IDX:
-                active_voltages = display_voltages[ACTIVE_SIGNAL_START_IDX:]
-                valid_samples = active_voltages[np.isfinite(active_voltages)]
-                if len(valid_samples) > 0:
-                    peak = np.max(valid_samples)
-                    if np.isfinite(peak):
-                        max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or stream_idx == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-                        target_y_max = min(max(peak * 1.15, 0.01), max_cap)
-                        if receiver_id in (0, 3):
-                            target_y_max = max(target_y_max, 0.05)
-                        if target_y_max > self.current_y_max:
-                            self.current_y_max = target_y_max
-                            self._is_updating_plot = True
-                            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-                            self._is_updating_plot = False
+            # Display either frequency spectrum or time domain
+            if self.is_spectrum_mode:
+                freqs, mags = compute_spectrum(voltages)
+                self.curve.setData(freqs, mags)
+                if len(mags) > 0:
+                    peak_idx = np.argmax(mags)
+                    self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
+                    if self.control_panel.autoscale_cb.isChecked():
+                        peak = float(mags[peak_idx])
+                        if np.isfinite(peak):
+                            target_y_max = max(peak * 1.25, 0.005)
+                            if target_y_max > self.current_y_max or self.current_y_max == 0.01:
+                                self.current_y_max = target_y_max
+                                self._is_updating_plot = True
+                                self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                                self._is_updating_plot = False
+            else:
+                self.curve.setData(display_voltages)
+                self.snr_label.setText(snr_str)
+                # Peak Hold Auto Scale
+                if self.control_panel.autoscale_cb.isChecked() and len(display_voltages) > ACTIVE_SIGNAL_START_IDX:
+                    active_voltages = display_voltages[ACTIVE_SIGNAL_START_IDX:]
+                    valid_samples = active_voltages[np.isfinite(active_voltages)]
+                    if len(valid_samples) > 0:
+                        peak = np.max(valid_samples)
+                        if np.isfinite(peak):
+                            max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or stream_idx == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                            target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                            if receiver_id in (0, 3):
+                                target_y_max = max(target_y_max, 0.05)
+                            if target_y_max > self.current_y_max:
+                                self.current_y_max = target_y_max
+                                self._is_updating_plot = True
+                                self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                                self._is_updating_plot = False
             
             if self.is_single_shot:
                 self.get_receiver().send_command("stop")
