@@ -340,14 +340,12 @@ class SonarViewer(QMainWindow):
 
         if self.is_spectrum_mode:
             self.plot_widget.setTitle(f"{base_title} - Frequency Spectrum (FFT)")
-            self.plot_widget.setLabel('left', 'Magnitude', units='V')
+            self.plot_widget.setLabel('left', 'Magnitude')
             self.plot_widget.setLabel('bottom', 'Frequency', units='kHz')
-            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=80.0, yMin=0, yMax=10.0, minXRange=0, minYRange=0)
+            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=80.0, yMin=0, yMax=50000.0, minXRange=0, minYRange=0)
             self._is_updating_plot = True
             self.plot_widget.setXRange(0, 80.0, padding=0)
-            default_y = 0.5
-            self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
-            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+            self.current_y_max = 0.01
             self._is_updating_plot = False
         else:
             self.plot_widget.setTitle(base_title)
@@ -370,6 +368,7 @@ class SonarViewer(QMainWindow):
 
     def toggle_spectrum(self):
         self.is_spectrum_mode = self.spectrum_switch.isChecked()
+        self.current_y_max = 0.01
         self.update_plot_style()
         if self.latest_voltages is not None and len(self.latest_voltages) > 0:
             if self.is_spectrum_mode:
@@ -379,7 +378,7 @@ class SonarViewer(QMainWindow):
                     peak_idx = np.argmax(mags)
                     self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
                     if self.control_panel.autoscale_cb.isChecked():
-                        target_y_max = max(float(mags[peak_idx]) * 1.25, 0.005)
+                        target_y_max = max(float(mags[peak_idx]) * 1.25, 0.1)
                         self.current_y_max = target_y_max
                         self._is_updating_plot = True
                         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -413,15 +412,29 @@ class SonarViewer(QMainWindow):
                 self.control_panel.autoscale_cb.blockSignals(False)
 
     def reset_zoom(self):
+        if self.is_spectrum_mode:
+            self.current_y_max = 0.01
         self.update_plot_style()
         self.radar_widget.reset_zoom()
 
     def toggle_autoscale_cb(self, checked):
         if checked:
             self.current_y_max = 0.01
+            if self.is_spectrum_mode and self.latest_voltages is not None and len(self.latest_voltages) > 0:
+                _, mags = compute_spectrum(self.latest_voltages)
+                if len(mags) > 0:
+                    peak_idx = np.argmax(mags)
+                    self.current_y_max = max(float(mags[peak_idx]) * 1.25, 0.1)
         else:
             if self.is_spectrum_mode:
-                default_y = 0.5
+                if self.latest_voltages is not None and len(self.latest_voltages) > 0:
+                    _, mags = compute_spectrum(self.latest_voltages)
+                    if len(mags) > 0:
+                        self.current_y_max = max(float(np.max(mags)) * 1.25, 10.0)
+                    else:
+                        self.current_y_max = 10.0
+                else:
+                    self.current_y_max = 10.0
             else:
                 idx = self.control_panel.signal_type_combo.currentIndex()
                 rx_chan = self.control_panel.rx_select_combo.currentIndex()
@@ -430,7 +443,7 @@ class SonarViewer(QMainWindow):
                     default_y = PLOT_DEFAULT_Y_MAX_RX0
                 else:
                     default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-            self.current_y_max = default_y
+                self.current_y_max = default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
         self._is_updating_plot = False
@@ -522,7 +535,7 @@ class SonarViewer(QMainWindow):
                 peak_idx = np.argmax(mags)
                 self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
                 if self.control_panel.autoscale_cb.isChecked():
-                    target_y_max = max(float(mags[peak_idx]) * 1.25, 0.005)
+                    target_y_max = max(float(mags[peak_idx]) * 1.25, 0.1)
                     self.current_y_max = target_y_max
                     self._is_updating_plot = True
                     self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -642,9 +655,9 @@ class SonarViewer(QMainWindow):
                     self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
                     if self.control_panel.autoscale_cb.isChecked():
                         peak = float(mags[peak_idx])
-                        if np.isfinite(peak):
-                            target_y_max = max(peak * 1.25, 0.005)
-                            if target_y_max > self.current_y_max or self.current_y_max == 0.01:
+                        if np.isfinite(peak) and peak > 0:
+                            target_y_max = max(peak * 1.25, 0.1)
+                            if abs(target_y_max - self.current_y_max) > 0.05 or self.current_y_max == 0.01:
                                 self.current_y_max = target_y_max
                                 self._is_updating_plot = True
                                 self.plot_widget.setYRange(0, self.current_y_max, padding=0)

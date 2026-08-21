@@ -117,24 +117,23 @@ def process_radar_intensities(samples, pulse_type):
     return normalized
 
 def compute_spectrum(voltages, fs=FS):
-    """Compute single-sided FFT magnitude spectrum of the given voltage signal.
+    """Compute single-sided raw FFT magnitude spectrum of the given voltage signal.
     Returns:
         freqs_khz (np.ndarray): Frequency array in kHz (from 0 to Fs/2 / 1000).
-        magnitudes (np.ndarray): Magnitude spectrum in Volts.
+        magnitudes (np.ndarray): Raw FFT magnitude spectrum (independent of pulse type/compression ratio).
     """
     if len(voltages) == 0:
         return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
         
     n = len(voltages)
-    # Remove DC component / baseline to avoid DC peak
+    # Remove DC component / baseline to eliminate DC artifact
     baseline = np.median(voltages)
     ac_signal = voltages - baseline
     
-    # Direct FFT without full-buffer tapering window to preserve true symmetric LFM chirp spectrum
     fft_result = np.fft.rfft(ac_signal)
     freqs_khz = np.fft.rfftfreq(n, d=1.0 / fs) / 1000.0  # in kHz
     
-    # Scale magnitude to physical voltage amplitude
-    magnitudes = (2.0 / n) * np.abs(fft_result)
+    # Raw FFT magnitude (objective, independent of pulse length and compression ratio)
+    magnitudes = np.abs(fft_result)
     
     return freqs_khz, magnitudes
