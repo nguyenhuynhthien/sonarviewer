@@ -22,16 +22,10 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
         mags = np.sqrt(np.clip(samples, 0.0, None) * 2048.0)
         return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
     else:
-        if stream_idx in (0, 1):  # Raw or BPF
+        if stream_idx == 2:  # Compressed
             return (samples / 4096.0) * 3.3
-        elif stream_idx == 3:  # Compressed
-            # Reconstruct magnitude from single-pulse norm (shifted by 12 on kit)
-            mags = np.sqrt(np.clip(samples, 0.0, None) * 4096.0)
-            return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
-        else:  # Demodulated
-            # Reconstruct magnitude from single-pulse norm (shifted by 12 on kit)
-            mags = np.sqrt(np.clip(samples, 0.0, None) * 4096.0)
-            return (mags / Q15_MAX_VAL_RX12) * VOLTAGE_SCALE_RX_DEMOD_MULT
+        else:  # Raw or BPF
+            return (samples / 4096.0) * 3.3
 
 def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
     """Calculate the signal-to-noise ratio (SNR) in dB using a CFAR-like window approach."""
@@ -83,7 +77,7 @@ def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
         raw_snr = 20 * np.log10(signal_peak / noise_rms)
         
         # Calibrate out the peak selection bias
-        is_compressed = (receiver_id in (0, 3)) or (stream_idx == 3)
+        is_compressed = (receiver_id in (0, 3)) or (stream_idx == 2)
         bias = BIAS_COMPRESSED if is_compressed else BIAS_RAW_DEMOD
         
         calibrated_snr = raw_snr - bias

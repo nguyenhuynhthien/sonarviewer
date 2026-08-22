@@ -15,15 +15,17 @@ USB_DSP_SIZE = 40
 USB_TARGET_MAGIC = b"TGT1"
 USB_TARGET_HEADER_SIZE = 8
 USB_TARGET_ENTRY_SIZE = 16
-USB_MAX_SAMPLES = 2048
+SAMPLE_COUNT = 4096
+USB_MAX_SAMPLES = SAMPLE_COUNT
+DISPLAY_SAMPLE_COUNT = SAMPLE_COUNT
 STM32_USB_VID = 0x0483
 STM32_USB_PID = 0x5740
 
 # --- Physical & Signal Processing Parameters ---
 SPEED_OF_SOUND = 343.0  # m/s
 FS = 160000.0           # Hz (160 kHz)
-MAX_SAMPLES = 2048
-# Derived Max Range: (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS) -> ~1.0976m
+MAX_SAMPLES = DISPLAY_SAMPLE_COUNT
+# Derived Max Range: (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS) -> ~2.1952m
 MAX_RANGE = (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS)
 
 # Filter lengths (in samples) to correct for filter group delays
@@ -49,7 +51,7 @@ DEFAULT_MAX_STRENGTH = 10.0
 
 # Downsampling
 DOWNSAMPLE_FACTOR = 16
-# Derived number of downsampled bins (e.g. 2048 / 16 = 128 bins)
+# Derived number of downsampled bins (e.g. 4096 / 16 = 256 bins)
 DOWNSAMPLED_BINS = MAX_SAMPLES // DOWNSAMPLE_FACTOR
 
 # Voltage conversion scaling factors

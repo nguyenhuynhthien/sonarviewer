@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
 from constants import (
-    MAX_SAMPLES,
+    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT,
     PLOT_Y_MIN, PLOT_Y_MAX_RX0, PLOT_Y_MAX_RX12_RAW_DEMOD, PLOT_Y_MAX_RX12_COMPRESSED,
     PLOT_DEFAULT_Y_MAX_RX0, PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD, PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED,
     ACTIVE_SIGNAL_START_IDX
@@ -209,7 +209,6 @@ class SonarViewer(QMainWindow):
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
             f"Read ADC: {format_vietnamese(read_us)} us\n"
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
-            f"IQ Demodulate: {format_vietnamese(demod_us)} us\n"
             f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
             f"Accumulate: {format_vietnamese(accum_us)} us\n"
             f"Target Detect: {format_vietnamese(detect_us)} us\n"
@@ -293,7 +292,7 @@ class SonarViewer(QMainWindow):
         
         # 2. Signal Stream
         idx = self.control_panel.signal_type_combo.currentIndex()
-        modes = ["raw", "bpf", "demod", "compressed"]
+        modes = ["raw", "bpf", "compressed"]
         mode = modes[idx] if idx < len(modes) else "raw"
         self.get_receiver().send_command(f"mode:{mode}")
         
@@ -394,7 +393,7 @@ class SonarViewer(QMainWindow):
 
         # Enforce Compressed stream mode for Rx Sum (0) and Rx Diff (3)
         if actual_rx in (0, 3):
-            self.control_panel.signal_type_combo.setCurrentIndex(3) # Compressed
+            self.control_panel.signal_type_combo.setCurrentIndex(2) # Compressed
             self.control_panel.signal_type_combo.setEnabled(False)
             self.get_receiver().send_command("mode:compressed")
         else:
@@ -442,7 +441,7 @@ class SonarViewer(QMainWindow):
                 if actual_rx in (0, 3):
                     default_y = PLOT_DEFAULT_Y_MAX_RX0
                 else:
-                    default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                    default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                 self.current_y_max = default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -456,7 +455,7 @@ class SonarViewer(QMainWindow):
         self.update_plot_style()
 
     def change_signal_type(self, idx):
-        modes = ["raw", "bpf", "demod", "compressed"]
+        modes = ["raw", "bpf", "compressed"]
         mode = modes[idx] if idx < len(modes) else "raw"
         self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
@@ -603,7 +602,7 @@ class SonarViewer(QMainWindow):
             stream_idx = self.control_panel.signal_type_combo.currentIndex()
             voltages = convert_samples_to_voltages(samples, receiver_id, stream_idx)
             self.latest_voltages = voltages
-            display_voltages = voltages
+            display_voltages = voltages[:DISPLAY_SAMPLE_COUNT]
  
             # Calculate SNR
             pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
