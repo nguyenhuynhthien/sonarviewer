@@ -15,7 +15,7 @@ USB_DSP_SIZE = 40
 USB_TARGET_MAGIC = b"TGT1"
 USB_TARGET_HEADER_SIZE = 8
 USB_TARGET_ENTRY_SIZE = 16
-SAMPLE_COUNT = 4096
+SAMPLE_COUNT = 2048
 USB_MAX_SAMPLES = SAMPLE_COUNT
 DISPLAY_SAMPLE_COUNT = SAMPLE_COUNT
 STM32_USB_VID = 0x0483
@@ -23,22 +23,22 @@ STM32_USB_PID = 0x5740
 
 # --- Physical & Signal Processing Parameters ---
 SPEED_OF_SOUND = 343.0  # m/s
-FS = 160000.0           # Hz (160 kHz)
+FS = 96000.0            # Hz (96 kHz)
 MAX_SAMPLES = DISPLAY_SAMPLE_COUNT
-# Derived Max Range: (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS) -> ~2.1952m
+# Derived Max Range: (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS) -> ~3.6587m
 MAX_RANGE = (MAX_SAMPLES * SPEED_OF_SOUND) / (2.0 * FS)
 
 # Filter lengths (in samples) to correct for filter group delays
-FILTER_LEN_LFM = 320
-FILTER_LEN_BARKER13 = 320  # Backwards compatibility alias
+FILTER_LEN_LFM = 192
+FILTER_LEN_BARKER13 = 192  # Backwards compatibility alias
 FILTER_LEN_SINGLE = 8
 
 # CFAR & SNR parameters
 ACTIVE_SIGNAL_START_IDX = 120
 SMOOTHING_WINDOW_SIZE = 5
 CFAR_CUT_SIZE = 7
-CFAR_GUARD_SIZE_LFM = 160
-CFAR_GUARD_SIZE_BARKER13 = 160  # Backwards compatibility alias
+CFAR_GUARD_SIZE_LFM = 96
+CFAR_GUARD_SIZE_BARKER13 = 96  # Backwards compatibility alias
 CFAR_GUARD_SIZE_SINGLE = 16
 
 # SNR calibration biases
@@ -51,7 +51,7 @@ DEFAULT_MAX_STRENGTH = 10.0
 
 # Downsampling
 DOWNSAMPLE_FACTOR = 16
-# Derived number of downsampled bins (e.g. 4096 / 16 = 256 bins)
+# Derived number of downsampled bins (e.g. 2048 / 16 = 128 bins)
 DOWNSAMPLED_BINS = MAX_SAMPLES // DOWNSAMPLE_FACTOR
 
 # Voltage conversion scaling factors

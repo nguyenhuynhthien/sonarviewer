@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
 from constants import (
-    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT,
+    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT, FS,
     PLOT_Y_MIN, PLOT_Y_MAX_RX0, PLOT_Y_MAX_RX12_RAW_DEMOD, PLOT_Y_MAX_RX12_COMPRESSED,
     PLOT_DEFAULT_Y_MAX_RX0, PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD, PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED,
     ACTIVE_SIGNAL_START_IDX
@@ -338,12 +338,13 @@ class SonarViewer(QMainWindow):
         self.curve.setPen(pg.mkPen(pen_color, width=1.5))
 
         if self.is_spectrum_mode:
+            max_freq_khz = (FS / 2.0) / 1000.0
             self.plot_widget.setTitle(f"{base_title} - Frequency Spectrum (FFT)")
             self.plot_widget.setLabel('left', 'Magnitude')
             self.plot_widget.setLabel('bottom', 'Frequency', units='kHz')
-            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=80.0, yMin=0, yMax=50000.0, minXRange=0, minYRange=0)
+            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=max_freq_khz, yMin=0, yMax=50000.0, minXRange=0, minYRange=0)
             self._is_updating_plot = True
-            self.plot_widget.setXRange(0, 80.0, padding=0)
+            self.plot_widget.setXRange(0, max_freq_khz, padding=0)
             self.current_y_max = 0.01
             self._is_updating_plot = False
         else:
