@@ -139,12 +139,15 @@ class UsbFrameParser:
 
 def find_stm32_port():
     ports = list_ports.comports()
+    # 1. Tìm port CH343P / USB-UART Adapter
     for port in ports:
-        if port.vid == STM32_USB_VID and port.pid == STM32_USB_PID:
-            return port.device
+        dev = port.device
+        desc = (port.description or "").lower()
+        if "5aa90328801" in dev.lower() or "usbmodem" in dev.lower() or "wch" in desc or "ch34" in desc:
+            return dev
+    # 2. Dự phòng port tty / cu khác
     for port in ports:
-        description = (port.description or "").lower()
-        if "stm32" in description or "weact" in description:
+        if "cu.usb" in port.device or "ttyUSB" in port.device:
             return port.device
     return None
 
@@ -158,10 +161,12 @@ class DataReceiver(QThread):
     dsp_received = pyqtSignal(int, int, int, int, int, int, int, int, int)
     bytes_received = pyqtSignal(int)
 
-    def __init__(self, initial_configs=None):
+    def __init__(self, port="/dev/cu.usbmodem5AA90328801", baudrate=6000000, initial_configs=None):
         super().__init__()
         self.running = False
         self.serial_port = None
+        self.port = port
+        self.baudrate = baudrate
         self.initial_configs = initial_configs
         self.pending_commands = []
         self.current_angle = 90
@@ -172,20 +177,20 @@ class DataReceiver(QThread):
         try:
             while self.running:
                 if self.serial_port is None:
-                    device = find_stm32_port()
+                    device = self.port if self.port else find_stm32_port()
                     if device is None:
-                        self.status_changed.emit("Waiting for STM32 USB")
+                        self.status_changed.emit("Waiting for UART Port...")
                         self.msleep(500)
                         continue
                     try:
-                        self.serial_port = serial.Serial(device, USB_BAUDRATE, timeout=0.1)
-                        self.status_changed.emit(f"Connected to {device}")
+                        self.serial_port = serial.Serial(device, self.baudrate, timeout=0.1)
+                        self.status_changed.emit(f"UART Connected: {device} @ {self.baudrate} bps")
                         for command in self.pending_commands:
                             self.serial_port.write((command + "\n").encode("ascii"))
                             self.msleep(50)
                         self.pending_commands.clear()
-                    except serial.SerialException as error:
-                        self.status_changed.emit(f"USB error: {error}")
+                    except serial.SerialException:
+                        self.status_changed.emit("Waiting for UART Port...")
                         self.msleep(500)
                         continue
 
@@ -227,14 +232,20 @@ class DataReceiver(QThread):
                             tgt["strength"],
                             tgt["velocity"]
                         )
-                except (serial.SerialException, OSError) as error:
-                    self.status_changed.emit(f"USB disconnected: {error}")
+                except (serial.SerialException, OSError):
+                    self.status_changed.emit("UART Disconnected")
                     self._close_port()
                     parser.buffer.clear()
         finally:
             self._close_port()
             self.running = False
-            self.status_changed.emit("Disconnected")
+            self.status_changed.emit("UART Disconnected")
+
+    def set_config(self, port, baudrate):
+        if self.port != port or self.baudrate != baudrate:
+            self.port = port
+            self.baudrate = baudrate
+            self._close_port()
 
     def send_command(self, command):
         if self.serial_port is None or not self.serial_port.is_open:
@@ -254,5 +265,86 @@ class DataReceiver(QThread):
             try:
                 self.serial_port.close()
             except OSError:
+                pass
+            self.serial_port = None
+
+
+class UartReceiver(QThread):
+    text_received = pyqtSignal(str)
+    status_changed = pyqtSignal(str)
+
+    def __init__(self, port="/dev/cu.usbmodem5AA90328801", baudrate=6000000):
+        super().__init__()
+        self.port = port
+        self.baudrate = baudrate
+        self.running = False
+        self.serial_port = None
+
+    def run(self):
+        self.running = True
+        while self.running:
+            if self.serial_port is None:
+                # Tìm port nếu chưa chỉ định hoặc cố kết nối port chỉ định
+                target_port = self.port
+                if not target_port:
+                    # Auto find CH343 / USB modem ports
+                    for p in list_ports.comports():
+                        dev = p.device
+                        desc = (p.description or "").lower()
+                        if "usbmodem" in dev or "wch" in dev or "ch34" in desc:
+                            # Tránh port trùng với STM32 USB CDC nếu đã biết
+                            stm32_dev = find_stm32_port()
+                            if stm32_dev and dev == stm32_dev:
+                                continue
+                            target_port = dev
+                            break
+                if not target_port:
+                    self.status_changed.emit("UART: Waiting for CH343P port...")
+                    self.msleep(500)
+                    continue
+
+                try:
+                    self.serial_port = serial.Serial(target_port, self.baudrate, timeout=0.2)
+                    self.status_changed.emit(f"UART Connected: {target_port} @ {self.baudrate} bps")
+                except Exception as e:
+                    self.status_changed.emit(f"UART Connect error: {e}")
+                    self.msleep(500)
+                    continue
+
+            try:
+                data = self.serial_port.read(1024)
+                if data:
+                    text = data.decode("utf-8", errors="replace")
+                    self.text_received.emit(text)
+            except Exception as e:
+                self.status_changed.emit(f"UART Disconnected: {e}")
+                self._close_port()
+                self.msleep(500)
+
+        self._close_port()
+        self.status_changed.emit("UART Disconnected")
+
+    def set_config(self, port, baudrate):
+        if self.port != port or self.baudrate != baudrate:
+            self.port = port
+            self.baudrate = baudrate
+            self._close_port()
+
+    def send_data(self, data_str):
+        if self.serial_port and self.serial_port.is_open:
+            try:
+                self.serial_port.write(data_str.encode("utf-8"))
+            except Exception:
+                pass
+
+    def stop(self):
+        self.running = False
+        self._close_port()
+
+    def _close_port(self):
+        if self.serial_port is not None:
+            try:
+                self.serial_port.close()
+            except Exception:
                 pass
             self.serial_port = None

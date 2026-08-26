@@ -3,7 +3,11 @@ import os
 import json
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QTabWidget, QScrollArea, QPlainTextEdit, QCheckBox
+from PyQt6.QtWidgets import (
+    QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QLabel,
+    QTabWidget, QScrollArea, QPlainTextEdit, QCheckBox, QPushButton,
+    QComboBox, QLineEdit
+)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
@@ -17,7 +21,7 @@ from app.custom_zoom_viewbox import CustomZoomViewBox
 from app.radar_widget import RadarWidget
 from app.control_panel import ControlPanel
 from app.toggle_switch import ToggleSwitch
-from service.data_receiver import DataReceiver
+from service.data_receiver import DataReceiver, UartReceiver
 from service.signal_processor import convert_samples_to_voltages, calculate_snr, shift_voltages, compute_spectrum
 
 
@@ -102,6 +106,8 @@ class SonarViewer(QMainWindow):
 
         signal_tab = QWidget()
         signal_tab.setLayout(right_layout)
+        
+        # 1. Telemetry Tab
         telemetry_tab = QWidget()
         telemetry_layout = QVBoxLayout(telemetry_tab)
         self.telemetry_label = QPlainTextEdit("No telemetry received")
@@ -165,7 +171,7 @@ class SonarViewer(QMainWindow):
         self.telemetry_timer.timeout.connect(self.flush_telemetry)
         self.telemetry_timer.start()
 
-        # Khởi động Receiver
+        # Khởi động Receiver (DataReceiver qua UART 6 Mbps)
         self.get_receiver()
 
     def get_receiver(self):
@@ -186,11 +192,11 @@ class SonarViewer(QMainWindow):
             self.send_all_configs()
         return self.receiver
 
-    def _on_ip_changed(self, host):
-        return
-
     def _on_status_changed(self, status):
         self.control_panel.update_status(status)
+
+    def _on_ip_changed(self, text):
+        pass
 
     def update_telemetry(self, sequence, adc1_fs_hz, adc1_pri_us, adc2_fs_hz, adc2_pri_us, dac_fs_hz, dac_pri_us):
         self.telemetry_buffer.append(

@@ -2,8 +2,9 @@
 
 import numpy as np
 
-# --- Native USB CDC Settings ---
-USB_BAUDRATE = 115200
+# --- UART Serial Settings (CH343P / Direct UART) ---
+SERIAL_BAUDRATE = 6000000
+USB_BAUDRATE = 6000000  # Compatibility alias
 USB_FRAME_MAGIC = b"FRX1"
 USB_FRAME_HEADER_SIZE = 16
 USB_LOG_MAGIC = b"LOG1"

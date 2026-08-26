@@ -31,9 +31,9 @@ class ControlPanel(QWidget):
         grid_layout.setSpacing(8)
         main_layout.addLayout(grid_layout)
 
-        # USB device status/input placeholder
-        self.ip_input = QLineEdit("USB auto-detect")
-        self.ip_input.setFixedWidth(120)
+        # UART device status/input placeholder
+        self.ip_input = QLineEdit("UART auto-detect")
+        self.ip_input.setFixedWidth(130)
         self.ip_input.editingFinished.connect(self._on_ip_changed)
 
         # Pause Button
@@ -159,14 +159,18 @@ class ControlPanel(QWidget):
         main_layout.addLayout(info_layout)
 
     def update_status(self, status):
-        if status.startswith("Connected"):
+        if "Connected" in status and "Connect error" not in status and "Disconnected" not in status:
             self.status_label.setText("<span style='color: #4CD964; font-size: 16px;'>●</span> Connected")
             self.status_label.setToolTip(status)
-        elif status.startswith("Disconnected"):
+        elif "Disconnected" in status or "Error" in status:
             self.status_label.setText("<span style='color: #FF3B30; font-size: 16px;'>●</span> Disconnected")
-            self.status_label.setToolTip("")
+            self.status_label.setToolTip(status)
+        elif "Waiting" in status:
+            self.status_label.setText("<span style='color: #FF9500; font-size: 16px;'>●</span> Waiting...")
+            self.status_label.setToolTip(status)
         else:
-            self.status_label.setText(f"<span style='color: #FF9500; font-size: 16px;'>●</span> {status}")
+            short_text = (status[:18] + "...") if len(status) > 20 else status
+            self.status_label.setText(f"<span style='color: #FF9500; font-size: 16px;'>●</span> {short_text}")
             self.status_label.setToolTip(status)
 
     def set_paused_state(self, paused):
