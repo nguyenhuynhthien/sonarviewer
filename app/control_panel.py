@@ -92,11 +92,13 @@ class ControlPanel(QWidget):
         self.capture_next_btn.clicked.connect(self.capture_next_clicked.emit)
         self.capture_next_btn.setVisible(False)
 
-        # Switches
+        # Switches (Always default to OFF for safety)
         self.servo_switch = ToggleSwitch()
+        self.servo_switch.setChecked(False)
         self.servo_switch.clicked.connect(self._on_servo_clicked)
 
         self.tx_switch = ToggleSwitch()
+        self.tx_switch.setChecked(False)
         self.tx_switch.clicked.connect(self._on_tx_clicked)
 
         # Group Tx On label and switch

@@ -156,6 +156,7 @@ class DataReceiver(QThread):
     data_received = pyqtSignal(np.ndarray, int, int)
     target_received = pyqtSignal(float, int, float, float)
     status_changed = pyqtSignal(str)
+    port_connected = pyqtSignal()
     telemetry_received = pyqtSignal(int, int, int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
     dsp_received = pyqtSignal(int, int, int, int, int, int, int, int, int)
@@ -184,11 +185,14 @@ class DataReceiver(QThread):
                         continue
                     try:
                         self.serial_port = serial.Serial(device, self.baudrate, timeout=0.1)
+                        self.msleep(100)  # Chờ chip USB-UART và DTR/RTS ổn định
                         self.status_changed.emit(f"UART Connected: {device} @ {self.baudrate} bps")
                         for command in self.pending_commands:
                             self.serial_port.write((command + "\n").encode("ascii"))
-                            self.msleep(50)
+                            self.serial_port.flush()
+                            self.msleep(20)
                         self.pending_commands.clear()
+                        self.port_connected.emit()
                     except serial.SerialException:
                         self.status_changed.emit("Waiting for UART Port...")
                         self.msleep(500)
@@ -253,6 +257,7 @@ class DataReceiver(QThread):
             return
         try:
             self.serial_port.write((command + "\n").encode("ascii"))
+            self.serial_port.flush()
         except (serial.SerialException, OSError):
             self.pending_commands.append(command)
 

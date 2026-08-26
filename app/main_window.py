@@ -188,8 +188,8 @@ class SonarViewer(QMainWindow):
             self.receiver.bytes_received.connect(self.update_bytes_received)
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self._on_status_changed)
+            self.receiver.port_connected.connect(self.send_all_configs)
             self.receiver.start()
-            self.send_all_configs()
         return self.receiver
 
     def _on_status_changed(self, status):
@@ -199,6 +199,12 @@ class SonarViewer(QMainWindow):
         pass
 
     def update_telemetry(self, sequence, adc1_fs_hz, adc1_pri_us, adc2_fs_hz, adc2_pri_us, dac_fs_hz, dac_pri_us):
+        # Phát hiện kit STM32 vừa bị Reset (sequence nhảy lùi về 0 hoặc nhỏ)
+        last_seq = getattr(self, "_last_telemetry_sequence", 0)
+        if sequence < last_seq and sequence <= 2:
+            self.send_all_configs()
+        self._last_telemetry_sequence = sequence
+
         self.telemetry_buffer.append(
             f"Sequence: {format_vietnamese(sequence)}\n"
             f"ADC1 sampling rate: {format_vietnamese(adc1_fs_hz)} Hz\n"
@@ -291,37 +297,45 @@ class SonarViewer(QMainWindow):
         self.control_panel.info_label.setText(f"Tx switch command sent: {cmd}")
 
     def send_all_configs(self):
+        receiver = self.get_receiver()
+        
         # 1. Pulse Type
         pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
-        self.get_receiver().pulse_type = pulse_type
-        self.get_receiver().send_command(f"cfg:{pulse_type}")
+        receiver.pulse_type = pulse_type
         
-        # 2. Signal Stream
+        # 2. Signal Stream (raw, bpf, compressed)
         idx = self.control_panel.signal_type_combo.currentIndex()
         modes = ["raw", "bpf", "compressed"]
-        mode = modes[idx] if idx < len(modes) else "raw"
-        self.get_receiver().send_command(f"mode:{mode}")
+        mode = modes[idx] if idx < len(modes) else "compressed"
         
         # 3. Servo State
         servo_cmd = "servo:on" if self.control_panel.servo_switch.isChecked() else "servo:off"
-        self.get_receiver().send_command(servo_cmd)
         
         # 4. Tx Attenuation
         txt = self.control_panel.tx_atten_combo.currentText()
         atten_val = "mute" if txt == "Mute" else txt.replace(" dB", "").replace("-", "")
-        self.get_receiver().send_command(f"tx_atten:{atten_val}")
         
         # 5. Tx Switch State
         tx_cmd = "tx:on" if self.control_panel.tx_switch.isChecked() else "tx:off"
-        self.get_receiver().send_command(tx_cmd)
         
         # 6. Rx Select Channel
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
         channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
         actual_rx = channel_map.get(rx_chan, 0)
-        self.get_receiver().send_command(f"rx_select:{actual_rx}")
         
-        self.control_panel.info_label.setText(f"Initial configs sent: cfg:{pulse_type} | mode:{mode} | {servo_cmd} | tx_atten:{atten_val} | {tx_cmd} | rx_select:{rx_chan}")
+        commands = [
+            f"cfg:{pulse_type}",
+            f"mode:{mode}",
+            servo_cmd,
+            f"tx_atten:{atten_val}",
+            tx_cmd,
+            f"rx_select:{actual_rx}"
+        ]
+        
+        for cmd in commands:
+            receiver.send_command(cmd)
+        
+        self.control_panel.info_label.setText(f"Configs sent: cfg:{pulse_type} | mode:{mode} | rx_select:{actual_rx}")
 
     def update_plot_style(self):
         rx_chan = self.control_panel.rx_select_combo.currentIndex()
@@ -603,6 +617,13 @@ class SonarViewer(QMainWindow):
         channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
         expected_rx = channel_map.get(self.control_panel.rx_select_combo.currentIndex(), 0)
         if receiver_id != expected_rx:
+            # Phát hiện STM32 bị lệch cấu hình (ví dụ vừa Reset), gửi lại toàn bộ cấu hình (pulse_type, mode, tx_atten, rx_select, ...)
+            now_ms = getattr(self, "_last_rx_sync_time", 0)
+            import time
+            current_time = time.time()
+            if current_time - now_ms > 0.5:
+                self._last_rx_sync_time = current_time
+                self.send_all_configs()
             return
             
         if len(samples) > 0:
