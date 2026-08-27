@@ -34,6 +34,7 @@ class UsbFrameParser:
         debug = []
         dsp = []
         targets = []
+        text_logs = []
 
         while True:
             signal_start = self.buffer.find(b"FRX")
@@ -43,10 +44,39 @@ class UsbFrameParser:
             target_start = self.buffer.find(USB_TARGET_MAGIC)
             starts = [value for value in (signal_start, log_start, debug_start, dsp_start, target_start) if value >= 0]
             if not starts:
+                # Kiểm tra nếu trong buffer có chứa chuỗi text (ví dụ log panic hoặc log hệ thống)
+                newline_pos = self.buffer.find(b"\n")
+                if newline_pos >= 0:
+                    line_bytes = self.buffer[:newline_pos + 1]
+                    try:
+                        text_str = line_bytes.decode("utf-8", errors="replace")
+                        if any(c.isalnum() for c in text_str) or "=" in text_str or "-" in text_str:
+                            text_logs.append(text_str)
+                    except Exception:
+                        pass
+                    del self.buffer[:newline_pos + 1]
+                    continue
+                # Nếu không có newline nhưng buffer chứa text (ví dụ khi kết thúc truyền sau crash)
+                if len(self.buffer) > 0 and (b"=" in self.buffer or b"Backtrace" in self.buffer or b"CFSR" in self.buffer):
+                    try:
+                        text_str = self.buffer.decode("utf-8", errors="replace")
+                        text_logs.append(text_str)
+                    except Exception:
+                        pass
+                    self.buffer.clear()
+                    break
+
                 self.buffer = self.buffer[-3:]
                 break
             start = min(starts)
             if start:
+                pre_data = self.buffer[:start]
+                try:
+                    pre_text = pre_data.decode("utf-8", errors="ignore")
+                    if any(c.isalnum() for c in pre_text):
+                        text_logs.append(pre_text)
+                except Exception:
+                    pass
                 del self.buffer[:start]
             if self.buffer.startswith(USB_LOG_MAGIC):
                 if len(self.buffer) < USB_LOG_SIZE:
@@ -127,26 +157,45 @@ class UsbFrameParser:
 
             frame_size = USB_FRAME_HEADER_SIZE + sample_count * 2
             if len(self.buffer) < frame_size:
+                # Kiểm tra nếu trong phần buffer còn lại xuất hiện chuỗi Panic / Backtrace
+                # (nghĩa là frame FRX này bị đứt gánh giữa chừng do MCU crash)
+                panic_pos = self.buffer.find(b"[SYSTEM PANIC / CRASH]")
+                if panic_pos < 0:
+                    panic_pos = self.buffer.find(b"SYSTEM PANIC")
+                if panic_pos >= 0:
+                    # Lùi lại tìm dấu '=' đầu tiên của chuỗi các dấu '=' liên tục
+                    p = panic_pos
+                    while p > 0 and self.buffer[p - 1] in (ord('='), ord(' '), ord('\r'), ord('\n')):
+                        p -= 1
+                    del self.buffer[:p]
+                    continue
                 break
 
+            # Kiểm tra xem trong payload của frame có vô tình chứa đoạn text log Panic hay không
+            payload_raw = self.buffer[USB_FRAME_HEADER_SIZE:frame_size]
+            panic_in_payload = payload_raw.find(b"[SYSTEM PANIC / CRASH]")
+            if panic_in_payload < 0:
+                panic_in_payload = payload_raw.find(b"SYSTEM PANIC")
+            if panic_in_payload >= 0:
+                p = panic_in_payload
+                while p > 0 and payload_raw[p - 1] in (ord('='), ord(' '), ord('\r'), ord('\n')):
+                    p -= 1
+                del self.buffer[:USB_FRAME_HEADER_SIZE + p]
+                continue
+
             receiver_id = self.buffer[3] - 0x30
-            payload = bytes(self.buffer[USB_FRAME_HEADER_SIZE:frame_size])
+            payload = bytes(payload_raw)
             del self.buffer[:frame_size]
             frames.append((np.frombuffer(payload, dtype="<i2").astype(np.float32), receiver_id))
 
-        return frames, telemetry, debug, dsp, targets
+        return frames, telemetry, debug, dsp, targets, text_logs
 
 
 def find_stm32_port():
-    ports = list_ports.comports()
-    # 1. Tìm port CH343P / USB-UART Adapter
+    ports = list(list_ports.comports())
     for port in ports:
-        dev = port.device
-        desc = (port.description or "").lower()
-        if "5aa90328801" in dev.lower() or "usbmodem" in dev.lower() or "wch" in desc or "ch34" in desc:
-            return dev
-    # 2. Dự phòng port tty / cu khác
-    for port in ports:
+        if port.vid == STM32_USB_VID and port.pid == STM32_USB_PID:
+            return port.device
         if "cu.usb" in port.device or "ttyUSB" in port.device:
             return port.device
     return None
@@ -160,6 +209,7 @@ class DataReceiver(QThread):
     telemetry_received = pyqtSignal(int, int, int, int, int, int, int)
     debug_received = pyqtSignal(int, int, int, int, int, bool, list, list)
     dsp_received = pyqtSignal(int, int, int, int, int, int, int, int, int)
+    text_log_received = pyqtSignal(str)
     bytes_received = pyqtSignal(int)
 
     def __init__(self, port="/dev/cu.usbmodem5AA90328801", baudrate=6000000, initial_configs=None):
@@ -202,7 +252,9 @@ class DataReceiver(QThread):
                     data = self.serial_port.read(8192)
                     if data:
                         self.bytes_received.emit(len(data))
-                    signal_frames, telemetry_frames, debug_frames, dsp_frames, target_frames = parser.feed(data)
+                    signal_frames, telemetry_frames, debug_frames, dsp_frames, target_frames, text_logs = parser.feed(data)
+                    for log_line in text_logs:
+                        self.text_log_received.emit(log_line)
                     for samples, rx_id in signal_frames:
                         self.data_received.emit(samples, self.current_angle, rx_id)
                     for log in telemetry_frames:

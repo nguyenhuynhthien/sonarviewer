@@ -185,6 +185,7 @@ class SonarViewer(QMainWindow):
             self.receiver.telemetry_received.connect(self.update_telemetry)
             self.receiver.debug_received.connect(self.update_debug)
             self.receiver.dsp_received.connect(self.update_dsp_log)
+            self.receiver.text_log_received.connect(self.update_text_log)
             self.receiver.bytes_received.connect(self.update_bytes_received)
             self.receiver.target_received.connect(self.update_target)
             self.receiver.status_changed.connect(self._on_status_changed)
@@ -197,6 +198,12 @@ class SonarViewer(QMainWindow):
 
     def _on_ip_changed(self, text):
         pass
+
+    def update_text_log(self, text):
+        # Đẩy trực tiếp log text (Panic, Backtrace, Boot log) vào buffer hiển thị
+        if self.telemetry_label.toPlainText() == "No telemetry received" or "No recognized telemetry frame yet" in self.telemetry_label.toPlainText():
+            self.telemetry_label.clear()
+        self.telemetry_buffer.append(text)
 
     def update_telemetry(self, sequence, adc1_fs_hz, adc1_pri_us, adc2_fs_hz, adc2_pri_us, dac_fs_hz, dac_pri_us):
         # Phát hiện kit STM32 vừa bị Reset (sequence nhảy lùi về 0 hoặc nhỏ)
@@ -262,7 +269,7 @@ class SonarViewer(QMainWindow):
         combined_text = "".join(self.telemetry_buffer)
         self.telemetry_buffer.clear()
 
-        if self.telemetry_label.toPlainText() == "No telemetry received":
+        if self.telemetry_label.toPlainText() == "No telemetry received" or "No recognized telemetry frame yet" in self.telemetry_label.toPlainText():
             self.telemetry_label.clear()
 
         self.telemetry_label.appendPlainText(combined_text)
@@ -273,7 +280,8 @@ class SonarViewer(QMainWindow):
 
     def update_bytes_received(self, count):
         self._usb_bytes_received = getattr(self, "_usb_bytes_received", 0) + count
-        if "No telemetry received" in self.telemetry_label.toPlainText():
+        # Không tự ý ghi đè nếu telemetry_buffer hoặc nội dung log đang có dữ liệu
+        if self.telemetry_label.toPlainText() == "No telemetry received":
             self.telemetry_label.setPlainText(
                 f"USB bytes received: {format_vietnamese(self._usb_bytes_received)}\n"
                 "No recognized telemetry frame yet"
