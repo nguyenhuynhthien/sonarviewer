@@ -228,6 +228,7 @@ class SonarViewer(QMainWindow):
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
             f"Read ADC: {format_vietnamese(read_us)} us\n"
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
+            f"Demodulation: {format_vietnamese(demod_us)} us\n"
             f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
             f"Accumulate: {format_vietnamese(accum_us)} us\n"
             f"Target Detect: {format_vietnamese(detect_us)} us\n"
@@ -311,9 +312,9 @@ class SonarViewer(QMainWindow):
         pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
         receiver.pulse_type = pulse_type
         
-        # 2. Signal Stream (raw, bpf, compressed)
+        # 2. Stream Mode
         idx = self.control_panel.signal_type_combo.currentIndex()
-        modes = ["raw", "bpf", "compressed"]
+        modes = ["raw", "bpf", "compressed", "demodulated"]
         mode = modes[idx] if idx < len(modes) else "compressed"
         
         # 3. Servo State
@@ -484,7 +485,7 @@ class SonarViewer(QMainWindow):
         self.update_plot_style()
 
     def change_signal_type(self, idx):
-        modes = ["raw", "bpf", "compressed"]
+        modes = ["raw", "bpf", "compressed", "demodulated"]
         mode = modes[idx] if idx < len(modes) else "raw"
         self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
