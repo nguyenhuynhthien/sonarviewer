@@ -118,7 +118,7 @@ class UsbFrameParser:
                     "demod_us": int.from_bytes(self.buffer[20:24], "little"),
                     "mfilt_us": int.from_bytes(self.buffer[24:28], "little"),
                     "send_us": int.from_bytes(self.buffer[28:32], "little"),
-                    "accum_us": int.from_bytes(self.buffer[32:36], "little"),
+                    "ds_us": int.from_bytes(self.buffer[32:36], "little"),
                     "detect_us": int.from_bytes(self.buffer[36:40], "little"),
                 })
                 del self.buffer[:USB_DSP_SIZE]
@@ -278,7 +278,7 @@ class DataReceiver(QThread):
                             log["demod_us"],
                             log["mfilt_us"],
                             log["send_us"],
-                            log["accum_us"],
+                            log["ds_us"],
                             log["detect_us"]
                         )
                     for tgt in target_frames:

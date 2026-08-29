@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
 from constants import (
-    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT, FS,
+    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT, FS, SAMPLE_COUNT, DOWNSAMPLED_BINS,
     PLOT_Y_MIN, PLOT_Y_MAX_RX0, PLOT_Y_MAX_RX12_RAW_DEMOD, PLOT_Y_MAX_RX12_COMPRESSED,
     PLOT_DEFAULT_Y_MAX_RX0, PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD, PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED,
     ACTIVE_SIGNAL_START_IDX
@@ -222,15 +222,15 @@ class SonarViewer(QMainWindow):
             f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n\n"
         )
 
-    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, accum_us, detect_us=0):
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, ds_us, detect_us=0):
         self.telemetry_buffer.append(
             f"--- DSP Log #{format_vietnamese(sequence)} ---\n"
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
             f"Read ADC: {format_vietnamese(read_us)} us\n"
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
             f"Demodulation: {format_vietnamese(demod_us)} us\n"
+            f"DownSampling: {format_vietnamese(ds_us)} us\n"
             f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
-            f"Accumulate: {format_vietnamese(accum_us)} us\n"
             f"Target Detect: {format_vietnamese(detect_us)} us\n"
             f"Send Data: {format_vietnamese(send_us)} us\n\n"
         )
@@ -314,7 +314,7 @@ class SonarViewer(QMainWindow):
         
         # 2. Stream Mode
         idx = self.control_panel.signal_type_combo.currentIndex()
-        modes = ["raw", "bpf", "compressed", "demodulated"]
+        modes = ["raw", "bpf", "demodulated", "downsampling", "compressed"]
         mode = modes[idx] if idx < len(modes) else "compressed"
         
         # 3. Servo State
@@ -385,13 +385,14 @@ class SonarViewer(QMainWindow):
                 y_lim = PLOT_Y_MAX_RX0
                 default_y = PLOT_DEFAULT_Y_MAX_RX0
             else:
-                y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_Y_MAX_RX12_RAW_DEMOD
-                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 3 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                y_lim = PLOT_Y_MAX_RX12_COMPRESSED if idx == 4 else PLOT_Y_MAX_RX12_RAW_DEMOD
+                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 4 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
 
-            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=MAX_SAMPLES, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
+            max_x = DOWNSAMPLED_BINS if idx == 3 else MAX_SAMPLES
+            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=max_x, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
             self.current_y_max = 0.01 if self.control_panel.autoscale_cb.isChecked() else default_y
             self._is_updating_plot = True
-            self.plot_widget.setXRange(0, MAX_SAMPLES, padding=0)
+            self.plot_widget.setXRange(0, max_x, padding=0)
             self.plot_widget.setYRange(0, self.current_y_max, padding=0)
             self._is_updating_plot = False
 
@@ -423,7 +424,7 @@ class SonarViewer(QMainWindow):
 
         # Enforce Compressed stream mode for Rx Sum (0) and Rx Diff (3)
         if actual_rx in (0, 3):
-            self.control_panel.signal_type_combo.setCurrentIndex(2) # Compressed
+            self.control_panel.signal_type_combo.setCurrentIndex(4) # Compressed
             self.control_panel.signal_type_combo.setEnabled(False)
             self.get_receiver().send_command("mode:compressed")
         else:
@@ -471,7 +472,7 @@ class SonarViewer(QMainWindow):
                 if actual_rx in (0, 3):
                     default_y = PLOT_DEFAULT_Y_MAX_RX0
                 else:
-                    default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 2 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                    default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED if idx == 4 else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                 self.current_y_max = default_y
         self._is_updating_plot = True
         self.plot_widget.setYRange(0, self.current_y_max, padding=0)
@@ -485,7 +486,7 @@ class SonarViewer(QMainWindow):
         self.update_plot_style()
 
     def change_signal_type(self, idx):
-        modes = ["raw", "bpf", "compressed", "demodulated"]
+        modes = ["raw", "bpf", "demodulated", "downsampling", "compressed"]
         mode = modes[idx] if idx < len(modes) else "raw"
         self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
@@ -573,13 +574,15 @@ class SonarViewer(QMainWindow):
             self.curve.setData(voltages)
             self.snr_label.setText(pulse['snr_str'])
             # Peak Hold Auto Scale for captured pulse
-            if self.control_panel.autoscale_cb.isChecked() and len(voltages) > ACTIVE_SIGNAL_START_IDX:
-                active_voltages = voltages[ACTIVE_SIGNAL_START_IDX:]
+            scale_factor = (len(voltages) / SAMPLE_COUNT) if len(voltages) < SAMPLE_COUNT else 1.0
+            active_start = max(1, int(ACTIVE_SIGNAL_START_IDX * scale_factor))
+            if self.control_panel.autoscale_cb.isChecked() and len(voltages) > active_start:
+                active_voltages = voltages[active_start:]
                 valid_samples = active_voltages[np.isfinite(active_voltages)]
                 if len(valid_samples) > 0:
                     peak = np.max(valid_samples)
                     if np.isfinite(peak):
-                        max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (pulse['receiver_id'] in (0, 3) or pulse['stream_idx'] == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                        max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (pulse['receiver_id'] in (0, 3) or pulse['stream_idx'] == 4) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                         target_y_max = min(max(peak * 1.15, 0.01), max_cap)
                         if target_y_max > self.current_y_max:
                             self.current_y_max = target_y_max
@@ -702,13 +705,15 @@ class SonarViewer(QMainWindow):
                 self.curve.setData(display_voltages)
                 self.snr_label.setText(snr_str)
                 # Peak Hold Auto Scale
-                if self.control_panel.autoscale_cb.isChecked() and len(display_voltages) > ACTIVE_SIGNAL_START_IDX:
-                    active_voltages = display_voltages[ACTIVE_SIGNAL_START_IDX:]
+                scale_factor = (len(display_voltages) / SAMPLE_COUNT) if len(display_voltages) < SAMPLE_COUNT else 1.0
+                active_start = max(1, int(ACTIVE_SIGNAL_START_IDX * scale_factor))
+                if self.control_panel.autoscale_cb.isChecked() and len(display_voltages) > active_start:
+                    active_voltages = display_voltages[active_start:]
                     valid_samples = active_voltages[np.isfinite(active_voltages)]
                     if len(valid_samples) > 0:
                         peak = np.max(valid_samples)
                         if np.isfinite(peak):
-                            max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or stream_idx == 2) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                            max_cap = PLOT_DEFAULT_Y_MAX_RX0 if (receiver_id in (0, 3) or stream_idx == 4) else PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
                             target_y_max = min(max(peak * 1.15, 0.01), max_cap)
                             if receiver_id in (0, 3):
                                 target_y_max = max(target_y_max, 0.05)
