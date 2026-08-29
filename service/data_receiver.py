@@ -186,7 +186,8 @@ class UsbFrameParser:
             receiver_id = self.buffer[3] - 0x30
             payload = bytes(payload_raw)
             del self.buffer[:frame_size]
-            frames.append((np.frombuffer(payload, dtype="<i2").astype(np.float32), receiver_id))
+            # Dữ liệu mẫu truyền lên từ STM32 là uint16 (bao gồm bias 2048 hoặc giá trị lớn hơn 32767 khi nén xung)
+            frames.append((np.frombuffer(payload, dtype="<u2").astype(np.float32), receiver_id))
 
         return frames, telemetry, debug, dsp, targets, text_logs
 

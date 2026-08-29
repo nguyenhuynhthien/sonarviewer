@@ -1,6 +1,6 @@
 {
     "pulse_type": "LFM",
-    "signal_type": 2,
+    "signal_type": 4,
     "tx_atten": "0 dB",
-    "rx_channel": 3
+    "rx_channel": 2
 }

@@ -22,7 +22,8 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
         mags = np.sqrt(np.clip(samples, 0.0, None) * 2048.0)
         return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
     else:
-        if stream_idx == 4:  # Compressed
+        if stream_idx == 4:  # Compressed (biên độ bao từ ADC_BIAS 2048 trở lên)
+            # Chuyển đổi trực tiếp giá trị mẫu 16-bit gửi từ STM32 thành điện áp
             return (samples / 4096.0) * 3.3
         else:  # Raw, BPF, Demodulated, DownSampling
             return (samples / 4096.0) * 3.3
