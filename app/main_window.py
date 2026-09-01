@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
 
 from constants import (
-    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT, FS, SAMPLE_COUNT, DOWNSAMPLED_BINS,
+    MAX_SAMPLES, DISPLAY_SAMPLE_COUNT, FS, SAMPLE_COUNT, DOWNSAMPLED_BINS, MAX_RANGE,
     PLOT_Y_MIN, PLOT_Y_MAX_RX0, PLOT_Y_MAX_RX12_RAW_DEMOD, PLOT_Y_MAX_RX12_COMPRESSED,
     PLOT_DEFAULT_Y_MAX_RX0, PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD, PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED,
     ACTIVE_SIGNAL_START_IDX
@@ -99,6 +99,35 @@ class SonarViewer(QMainWindow):
         self.plot_widget.showGrid(x=True, y=True)
         self.curve = self.plot_widget.plot(pen=pg.mkPen('c', width=1.5))
         right_layout.addWidget(self.plot_widget)
+
+        # Heatmap 2D PlotWidget cho Range-Doppler Map (Trục X: Doppler, Trục Y: Range, Colorbar: dB)
+        self.rd_plot_widget = pg.PlotWidget(title="Range-Doppler Response")
+        self.rd_plot_widget.setLabel('bottom', 'Doppler', units='kHz')
+        self.rd_plot_widget.setLabel('left', 'Range', units='m')
+        self.rd_plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.rd_plot_widget.getViewBox().setAspectLocked(False)
+        self.rd_plot_widget.getViewBox().invertY(False)
+
+        self.rd_image_item = pg.ImageItem()
+        self.rd_plot_widget.addItem(self.rd_image_item)
+
+        # Thanh màu ColorBarItem bên phải hiển thị thang đo 'Amplitude (dB)' [-45 dB -> 0 dB]
+        try:
+            cmap = pg.colormap.get('turbo')
+        except Exception:
+            cmap = pg.colormap.get('viridis')
+
+        self.rd_colorbar = pg.ColorBarItem(
+            values=(-45.0, 0.0),
+            colorMap=cmap,
+            label='Amplitude (dB)',
+            limits=(-60.0, 10.0),
+            rounding=1
+        )
+        self.rd_colorbar.setImageItem(self.rd_image_item, insert_in=self.rd_plot_widget.getPlotItem())
+
+        self.rd_plot_widget.setVisible(False)
+        right_layout.addWidget(self.rd_plot_widget)
 
         # Lắng nghe sự kiện thay đổi vùng nhìn của biểu đồ
         self.plot_widget.getViewBox().sigRangeChanged.connect(self._on_plot_range_changed)
@@ -222,16 +251,16 @@ class SonarViewer(QMainWindow):
             f"DAC PRI: {format_vietnamese(dac_pri_us)} us\n\n"
         )
 
-    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, ds_us, detect_us=0):
+    def update_dsp_log(self, sequence, total_us, read_us, bpf_us, demod_us, mfilt_us, send_us, ds_us, rd_matrix_us=0):
         self.telemetry_buffer.append(
-            f"--- DSP Log #{format_vietnamese(sequence)} ---\n"
+            f"--- DSP Log #{format_vietnamese(sequence)} (Every 64 Pulses) ---\n"
             f"Total DSP time: {format_vietnamese(total_us)} us\n"
             f"Read ADC: {format_vietnamese(read_us)} us\n"
             f"BPF Filter: {format_vietnamese(bpf_us)} us\n"
             f"Demodulation: {format_vietnamese(demod_us)} us\n"
             f"DownSampling: {format_vietnamese(ds_us)} us\n"
             f"Matched Filter: {format_vietnamese(mfilt_us)} us\n"
-            f"Target Detect: {format_vietnamese(detect_us)} us\n"
+            f"Range-Doppler Matrix: {format_vietnamese(rd_matrix_us)} us\n"
             f"Send Data: {format_vietnamese(send_us)} us\n\n"
         )
 
@@ -314,7 +343,7 @@ class SonarViewer(QMainWindow):
         
         # 2. Stream Mode
         idx = self.control_panel.signal_type_combo.currentIndex()
-        modes = ["raw", "bpf", "demodulated", "downsampling", "compressed"]
+        modes = ["raw", "bpf", "demodulated", "downsampling", "compressed", "range_doppler"]
         mode = modes[idx] if idx < len(modes) else "compressed"
         
         # 3. Servo State
@@ -366,7 +395,13 @@ class SonarViewer(QMainWindow):
 
         self.curve.setPen(pg.mkPen(pen_color, width=1.5))
 
-        if self.is_spectrum_mode:
+        if idx == 5:  # Range-Doppler 2D Heatmap Mode
+            self.plot_widget.setVisible(False)
+            self.rd_plot_widget.setVisible(True)
+            self.snr_label.setText("Range-Doppler 2D Map (8x128)")
+        elif self.is_spectrum_mode:
+            self.rd_plot_widget.setVisible(False)
+            self.plot_widget.setVisible(True)
             max_freq_khz = (FS / 2.0) / 1000.0
             self.plot_widget.setTitle(f"{base_title} - Frequency Spectrum (FFT)")
             self.plot_widget.setLabel('left', 'Magnitude')
@@ -377,6 +412,8 @@ class SonarViewer(QMainWindow):
             self.current_y_max = 0.01
             self._is_updating_plot = False
         else:
+            self.rd_plot_widget.setVisible(False)
+            self.plot_widget.setVisible(True)
             self.plot_widget.setTitle(base_title)
             self.plot_widget.setLabel('left', 'Voltage', units='V')
             self.plot_widget.setLabel('bottom', 'Sample Index')
@@ -489,7 +526,7 @@ class SonarViewer(QMainWindow):
         self.update_plot_style()
 
     def change_signal_type(self, idx):
-        modes = ["raw", "bpf", "demodulated", "downsampling", "compressed"]
+        modes = ["raw", "bpf", "demodulated", "downsampling", "compressed", "range_doppler"]
         mode = modes[idx] if idx < len(modes) else "raw"
         self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
@@ -633,10 +670,11 @@ class SonarViewer(QMainWindow):
         if self.is_paused:
             return
 
-        # Check expected rx channel
+        # Check expected rx channel (ngoại trừ chế độ Range-Doppler luôn cố định ở kênh 0 - Rx Sum)
+        stream_idx = self.control_panel.signal_type_combo.currentIndex()
         channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
         expected_rx = channel_map.get(self.control_panel.rx_select_combo.currentIndex(), 0)
-        if receiver_id != expected_rx:
+        if stream_idx != 5 and receiver_id != expected_rx:
             # Phát hiện STM32 bị lệch cấu hình (ví dụ vừa Reset), gửi lại toàn bộ cấu hình (pulse_type, mode, tx_atten, rx_select, ...)
             now_ms = getattr(self, "_last_rx_sync_time", 0)
             import time
@@ -647,10 +685,9 @@ class SonarViewer(QMainWindow):
             return
             
         if len(samples) > 0:
-            stream_idx = self.control_panel.signal_type_combo.currentIndex()
             voltages = convert_samples_to_voltages(samples, receiver_id, stream_idx)
             self.latest_voltages = voltages
-            display_voltages = voltages[:DISPLAY_SAMPLE_COUNT]
+            display_voltages = voltages if stream_idx == 5 else voltages[:DISPLAY_SAMPLE_COUNT]
  
             # Calculate SNR
             pulse_type = self.control_panel.pulse_type_combo.currentText().lower()
@@ -659,12 +696,14 @@ class SonarViewer(QMainWindow):
             
             if calibrated_snr is not None:
                 snr_str = f"SNR: {calibrated_snr:.1f} dB"
+            elif stream_idx == 5:
+                snr_str = "RD 8x128"
             else:
                 snr_str = "SNR: -- dB"
             self.latest_snr_str = snr_str
             
             # Shift voltages to align radar history
-            shifted_voltages = shift_voltages(voltages, pulse_type)
+            shifted_voltages = voltages if stream_idx == 5 else shift_voltages(voltages, pulse_type)
             
             if self.is_capturing:
                 pulse_data = {
@@ -688,7 +727,7 @@ class SonarViewer(QMainWindow):
                     self.control_panel.set_paused_state(True)
                     return  # Stop processing further for this pulse update
             
-            if receiver_id in (0, 3):
+            if receiver_id in (0, 3) or stream_idx == 5:
                 self.radar_widget.set_data(angle, shifted_voltages)
             else:
                 self.radar_widget.set_angle(angle)
@@ -709,6 +748,44 @@ class SonarViewer(QMainWindow):
                                 self._is_updating_plot = True
                                 self.plot_widget.setYRange(0, self.current_y_max, padding=0)
                                 self._is_updating_plot = False
+            elif stream_idx == 5:
+                # Range-Doppler 2D Heatmap: chính xác 8 Doppler bins x 128 Range bins = 1024 mẫu
+                if len(display_voltages) == 1024:
+                    num_doppler = 8
+                    # STM32 lưu: rd_sum_mag_matrix[d][r] -> shape (8, 128)
+                    # Doppler bin d=0..7 (-4..+3), Range bin r=0..127
+                    rd_matrix = display_voltages.reshape(num_doppler, 128).astype(np.float32)
+                    
+                    # Chuyển sang thang đo Logarit / Decibel (dB) tương đối (Đỉnh 0 dB, nền tối thiểu -45 dB)
+                    peak_val = np.max(rd_matrix)
+                    if peak_val > 0:
+                        rd_db = 20.0 * np.log10(np.clip(rd_matrix / peak_val, 1e-3, 1.0))
+                    else:
+                        rd_db = np.zeros_like(rd_matrix) - 45.0
+
+                    # Tần số Doppler từ -d_span_khz đến +d_span_khz (-23.4375 Hz đến +23.4375 Hz)
+                    # PRI = SAMPLE_COUNT / FS = 2048 / 96000 = ~21.33 ms -> PRF = 46.875 Hz
+                    prf_hz = (FS / SAMPLE_COUNT)
+                    d_span_khz = (prf_hz / 2.0) / 1000.0 # 0.0234375 kHz
+                    bin_w = (2.0 * d_span_khz) / float(num_doppler) # Độ rộng 1 bin = 5.859375 mkHz
+                    
+                    # ImageItem nhận dữ liệu 2D theo trục [X, Y] = [Doppler, Range] -> shape (8, 128)
+                    self.rd_image_item.setImage(rd_db, autoLevels=False)
+                    self.rd_image_item.setLevels([-45.0, 0.0])
+                    
+                    from PyQt6.QtCore import QRectF
+                    # 8 Doppler bins: indices d=0..7 ứng với [-4, -3, -2, -1, 0, +1, +2, +3]
+                    # Bin index d=4 là 0 Hz. Để tâm bin 4 nằm chính xác tại X = 0.0 mkHz:
+                    # x_left = -(4 + 0.5) * bin_w = -4.5 * bin_w = -26.367 mkHz
+                    # total_w = 8 * bin_w = 46.875 mkHz
+                    x_left = -4.5 * bin_w
+                    total_w = float(num_doppler) * bin_w
+                    self.rd_image_item.setRect(QRectF(x_left, 0.0, total_w, MAX_RANGE))
+                    self.rd_plot_widget.setXRange(-d_span_khz, d_span_khz, padding=0.0)
+                    self.rd_plot_widget.setYRange(0.0, MAX_RANGE, padding=0.0)
+                    self.snr_label.setText(f"Peak: {peak_val:.0f}")
+                else:
+                    self.curve.setData(display_voltages)
             else:
                 self.curve.setData(display_voltages)
                 self.snr_label.setText(snr_str)

@@ -17,7 +17,9 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
     if len(samples) == 0:
         return np.array([], dtype=np.float32)
         
-    if receiver_id in (0, 3):
+    if stream_idx == 5:  # Range-Doppler 8x128
+        return samples
+    elif receiver_id in (0, 3):
         # Rx Sum (0) and Rx Diff (3) are average norms scaled by 1/2048. Reconstruct mags using sqrt.
         mags = np.sqrt(np.clip(samples, 0.0, None) * 2048.0)
         return np.clip((mags / COMPRESSED_MAX_VAL) * VOLTAGE_SCALE_RX_COMPRESSED_MULT, 0.0, VOLTAGE_CLIP_RX_COMPRESSED)
@@ -30,6 +32,8 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
 
 def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
     """Calculate the signal-to-noise ratio (SNR) in dB using a CFAR-like window approach."""
+    if stream_idx == 5:
+        return None
     n_samples = len(voltages)
     if n_samples == 0:
         return None
@@ -125,6 +129,11 @@ def process_radar_intensities(samples, pulse_type):
     
     if len(samples) == DOWNSAMPLED_BINS:
         downsampled = deviation
+    elif len(samples) == 8 * DOWNSAMPLED_BINS:
+        # Ma trận Range-Doppler 8x128 (1024 mẫu): Lấy max hoặc tổng hợp năng lượng theo từng Range bin
+        rd_mat = samples.reshape(8, DOWNSAMPLED_BINS)
+        # Năng lượng Doppler max theo từng khoảng cách
+        downsampled = np.max(rd_mat, axis=0)
     else:
         # Downsample to DOWNSAMPLED_BINS for fast rendering
         downsampled = deviation.reshape(-1, DOWNSAMPLE_FACTOR).mean(axis=1)
