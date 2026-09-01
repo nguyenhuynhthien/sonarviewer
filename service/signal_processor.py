@@ -33,6 +33,43 @@ def convert_samples_to_voltages(samples, receiver_id, stream_idx):
 def calculate_snr(voltages, pulse_type, tx_on, receiver_id, stream_idx):
     """Calculate the signal-to-noise ratio (SNR) in dB using a CFAR-like window approach."""
     if stream_idx == 5:
+        if len(voltages) != 8 * DOWNSAMPLED_BINS:
+            return None
+        rd_mat = voltages.reshape(8, DOWNSAMPLED_BINS)
+        active_start = max(1, int(ACTIVE_SIGNAL_START_IDX * (DOWNSAMPLED_BINS / SAMPLE_COUNT)))
+        active_mat = rd_mat[:, active_start:]
+        if active_mat.size == 0:
+            return None
+        
+        peak_idx_rel = np.unravel_index(np.argmax(active_mat), active_mat.shape)
+        peak_d = peak_idx_rel[0]
+        peak_r = active_start + peak_idx_rel[1]
+        
+        signal_peak = float(rd_mat[peak_d, peak_r])
+        
+        # 2D CFAR Guard area around peak along range (± 6 bins)
+        guard_r_min = max(active_start, peak_r - 6)
+        guard_r_max = min(DOWNSAMPLED_BINS, peak_r + 7)
+        
+        # Mask out direct-path region and guard region
+        mask = np.ones((8, DOWNSAMPLED_BINS), dtype=bool)
+        mask[:, :active_start] = False
+        mask[:, guard_r_min:guard_r_max] = False
+        
+        noise_samples = rd_mat[mask]
+        if len(noise_samples) == 0:
+            return None
+            
+        noise_baseline = np.median(noise_samples)
+        noise_deviation = np.abs(noise_samples - noise_baseline)
+        mad = np.median(noise_deviation)
+        noise_rms = mad / 0.6745 if mad > 1e-6 else np.std(noise_samples)
+        
+        signal_amp = signal_peak - noise_baseline
+        if noise_rms > 1e-6 and signal_amp > 1e-6:
+            raw_snr = 20.0 * np.log10(signal_amp / noise_rms)
+            calibrated_snr = raw_snr - BIAS_COMPRESSED
+            return calibrated_snr
         return None
     n_samples = len(voltages)
     if n_samples == 0:

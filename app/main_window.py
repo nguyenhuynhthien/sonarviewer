@@ -161,6 +161,14 @@ class SonarViewer(QMainWindow):
         self.snr_label.setFixedHeight(22)
         self.snr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # SNR Label overlaying the Range-Doppler plot widget
+        self.rd_snr_label = QLabel("SNR: -- dB", self.rd_plot_widget)
+        self.rd_snr_label.setStyleSheet("color: #4CD964; background-color: rgba(9, 13, 22, 200); border: 1px solid rgba(0, 255, 100, 100); padding: 3px 6px; border-radius: 4px; font-family: Menlo, Monaco, 'Courier New', monospace; font-size: 11px; font-weight: bold;")
+        self.rd_snr_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.rd_snr_label.setFixedWidth(90)
+        self.rd_snr_label.setFixedHeight(22)
+        self.rd_snr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         # 2. Thanh điều khiển phía dưới
         self.control_panel = ControlPanel()
         self.load_settings()
@@ -398,7 +406,7 @@ class SonarViewer(QMainWindow):
         if idx == 5:  # Range-Doppler 2D Heatmap Mode
             self.plot_widget.setVisible(False)
             self.rd_plot_widget.setVisible(True)
-            self.snr_label.setText("Range-Doppler 2D Map (8x128)")
+            self.rd_snr_label.setText(self.latest_snr_str)
         elif self.is_spectrum_mode:
             self.rd_plot_widget.setVisible(False)
             self.plot_widget.setVisible(True)
@@ -598,7 +606,28 @@ class SonarViewer(QMainWindow):
         voltages = pulse['voltages']
         
         # Update curve and label
-        if self.is_spectrum_mode:
+        if stream_idx == 5:
+            if len(voltages) == 1024:
+                num_doppler = 8
+                rd_matrix = voltages.reshape(num_doppler, 128).astype(np.float32)
+                peak_val = np.max(rd_matrix)
+                if peak_val > 0:
+                    rd_db = 20.0 * np.log10(np.clip(rd_matrix / peak_val, 1e-3, 1.0))
+                else:
+                    rd_db = np.zeros_like(rd_matrix) - 45.0
+                prf_hz = (FS / SAMPLE_COUNT)
+                d_span_khz = (prf_hz / 2.0) / 1000.0
+                bin_w = (2.0 * d_span_khz) / float(num_doppler)
+                self.rd_image_item.setImage(rd_db, autoLevels=False)
+                self.rd_image_item.setLevels([-45.0, 0.0])
+                from PyQt6.QtCore import QRectF
+                x_left = -4.5 * bin_w
+                total_w = float(num_doppler) * bin_w
+                self.rd_image_item.setRect(QRectF(x_left, 0.0, total_w, MAX_RANGE))
+                self.rd_plot_widget.setXRange(-d_span_khz, d_span_khz, padding=0.0)
+                self.rd_plot_widget.setYRange(0.0, MAX_RANGE, padding=0.0)
+                self.rd_snr_label.setText(pulse['snr_str'])
+        elif self.is_spectrum_mode:
             freqs, mags = compute_spectrum(voltages)
             self.curve.setData(freqs, mags)
             if len(mags) > 0:
@@ -622,7 +651,7 @@ class SonarViewer(QMainWindow):
                 if len(valid_samples) > 0:
                     peak = np.max(valid_samples)
                     if np.isfinite(peak):
-                        if pulse['stream_idx'] == 4:
+                        if pulse.get('stream_idx', 0) == 4:
                             max_cap = PLOT_Y_MAX_RX12_COMPRESSED
                         elif pulse['receiver_id'] in (0, 3):
                             max_cap = PLOT_DEFAULT_Y_MAX_RX0
@@ -783,7 +812,7 @@ class SonarViewer(QMainWindow):
                     self.rd_image_item.setRect(QRectF(x_left, 0.0, total_w, MAX_RANGE))
                     self.rd_plot_widget.setXRange(-d_span_khz, d_span_khz, padding=0.0)
                     self.rd_plot_widget.setYRange(0.0, MAX_RANGE, padding=0.0)
-                    self.snr_label.setText(f"Peak: {peak_val:.0f}")
+                    self.rd_snr_label.setText(snr_str)
                 else:
                     self.curve.setData(display_voltages)
             else:
@@ -827,9 +856,10 @@ class SonarViewer(QMainWindow):
         self.reposition_snr_labels()
 
     def reposition_snr_labels(self):
-        if not hasattr(self, 'snr_label') or not self.plot_widget:
-            return
-        self.snr_label.move(self.plot_widget.width() - 100, 10)
+        if hasattr(self, 'snr_label') and self.plot_widget:
+            self.snr_label.move(self.plot_widget.width() - 100, 10)
+        if hasattr(self, 'rd_snr_label') and self.rd_plot_widget:
+            self.rd_snr_label.move(max(10, self.rd_plot_widget.width() - 170), 10)
 
     def closeEvent(self, event):
         self.save_settings()
