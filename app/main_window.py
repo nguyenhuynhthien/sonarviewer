@@ -470,14 +470,13 @@ class SonarViewer(QMainWindow):
         channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
         actual_rx = channel_map.get(rx_chan, 0)
 
-        # Enforce Compressed stream mode for Rx Sum (0) and Rx Diff (3)
+        # For Rx Sum (0) and Rx Diff (3), allow Compressed or Range-Doppler (for Rx Sum)
+        current_stream = self.control_panel.signal_type_combo.currentIndex()
         if actual_rx in (0, 3):
-            self.control_panel.signal_type_combo.setCurrentIndex(4) # Compressed
-            self.control_panel.signal_type_combo.setEnabled(False)
-            self.get_receiver().send_command("mode:compressed")
-        else:
-            self.control_panel.signal_type_combo.setEnabled(True)
-
+            if current_stream not in (4, 5) or (actual_rx == 3 and current_stream == 5):
+                self.control_panel.signal_type_combo.setCurrentIndex(4) # Compressed
+                self.get_receiver().send_command("mode:compressed")
+        
         self.update_plot_style()
         self.get_receiver().send_command(f"rx_select:{actual_rx}")
         self.control_panel.info_label.setText(f"Rx channel select command sent: rx_select:{actual_rx}")
@@ -536,6 +535,14 @@ class SonarViewer(QMainWindow):
     def change_signal_type(self, idx):
         modes = ["raw", "bpf", "demodulated", "downsampling", "compressed", "range_doppler"]
         mode = modes[idx] if idx < len(modes) else "raw"
+        
+        if idx == 5:  # Range-Doppler
+            self.spectrum_switch.setChecked(False)
+            self.spectrum_switch.setEnabled(False)
+            self.is_spectrum_mode = False
+        else:
+            self.spectrum_switch.setEnabled(True)
+            
         self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
         self.control_panel.info_label.setText(f"Mode command sent: mode:{mode}")
@@ -761,23 +768,8 @@ class SonarViewer(QMainWindow):
             else:
                 self.radar_widget.set_angle(angle)
             
-            # Display either frequency spectrum or time domain
-            if self.is_spectrum_mode:
-                freqs, mags = compute_spectrum(voltages)
-                self.curve.setData(freqs, mags)
-                if len(mags) > 0:
-                    peak_idx = np.argmax(mags)
-                    self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
-                    if self.control_panel.autoscale_cb.isChecked():
-                        peak = float(mags[peak_idx])
-                        if np.isfinite(peak) and peak > 0:
-                            target_y_max = max(peak * 1.25, 0.1)
-                            if abs(target_y_max - self.current_y_max) > 0.05 or self.current_y_max == 0.01:
-                                self.current_y_max = target_y_max
-                                self._is_updating_plot = True
-                                self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-                                self._is_updating_plot = False
-            elif stream_idx == 5:
+            # Display either Range-Doppler, frequency spectrum or time domain
+            if stream_idx == 5:
                 # Range-Doppler 2D Heatmap: chính xác 8 Doppler bins x 128 Range bins = 1024 mẫu
                 if len(display_voltages) == 1024:
                     num_doppler = 8
@@ -813,8 +805,21 @@ class SonarViewer(QMainWindow):
                     self.rd_plot_widget.setXRange(-d_span_khz, d_span_khz, padding=0.0)
                     self.rd_plot_widget.setYRange(0.0, MAX_RANGE, padding=0.0)
                     self.rd_snr_label.setText(snr_str)
-                else:
-                    self.curve.setData(display_voltages)
+            elif self.is_spectrum_mode:
+                freqs, mags = compute_spectrum(voltages)
+                self.curve.setData(freqs, mags)
+                if len(mags) > 0:
+                    peak_idx = np.argmax(mags)
+                    self.snr_label.setText(f"Peak: {freqs[peak_idx]:.1f} kHz")
+                    if self.control_panel.autoscale_cb.isChecked():
+                        peak = float(mags[peak_idx])
+                        if np.isfinite(peak) and peak > 0:
+                            target_y_max = max(peak * 1.25, 0.1)
+                            if abs(target_y_max - self.current_y_max) > 0.05 or self.current_y_max == 0.01:
+                                self.current_y_max = target_y_max
+                                self._is_updating_plot = True
+                                self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                                self._is_updating_plot = False
             else:
                 self.curve.setData(display_voltages)
                 self.snr_label.setText(snr_str)
