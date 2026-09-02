@@ -426,23 +426,35 @@ class SonarViewer(QMainWindow):
             self.plot_widget.setLabel('left', 'Voltage', units='V')
             self.plot_widget.setLabel('bottom', 'Sample Index')
 
-            if actual_rx in (0, 3):
-                y_lim = PLOT_Y_MAX_RX0
-                default_y = PLOT_DEFAULT_Y_MAX_RX0
-            elif idx == 4:
-                y_lim = PLOT_Y_MAX_RX12_COMPRESSED
-                default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED
+            if idx == 1:  # BPF mode (tín hiệu AC dao động âm / dương quanh 0V)
+                y_min = -3.5
+                y_lim = 3.5
+                default_y = 1.75
+                max_x = MAX_SAMPLES
+                self.plot_widget.getViewBox().setLimits(xMin=0, xMax=max_x, yMin=y_min, yMax=y_lim, minXRange=0, minYRange=0)
+                self.current_y_max = default_y
+                self._is_updating_plot = True
+                self.plot_widget.setXRange(0, max_x, padding=0)
+                self.plot_widget.setYRange(-self.current_y_max, self.current_y_max, padding=0)
+                self._is_updating_plot = False
             else:
-                y_lim = PLOT_Y_MAX_RX12_RAW_DEMOD
-                default_y = PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                if idx == 4:
+                    y_lim = PLOT_Y_MAX_RX12_COMPRESSED
+                    default_y = PLOT_DEFAULT_Y_MAX_RX12_COMPRESSED
+                elif actual_rx in (0, 3) and idx == 0:
+                    y_lim = PLOT_Y_MAX_RX0
+                    default_y = PLOT_DEFAULT_Y_MAX_RX0
+                else:
+                    y_lim = PLOT_Y_MAX_RX12_RAW_DEMOD
+                    default_y = PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
 
-            max_x = DOWNSAMPLED_BINS if idx in (3, 4) else MAX_SAMPLES
-            self.plot_widget.getViewBox().setLimits(xMin=0, xMax=max_x, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
-            self.current_y_max = default_y
-            self._is_updating_plot = True
-            self.plot_widget.setXRange(0, max_x, padding=0)
-            self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-            self._is_updating_plot = False
+                max_x = DOWNSAMPLED_BINS if idx in (3, 4) else MAX_SAMPLES
+                self.plot_widget.getViewBox().setLimits(xMin=0, xMax=max_x, yMin=PLOT_Y_MIN, yMax=y_lim, minXRange=0, minYRange=0)
+                self.current_y_max = default_y
+                self._is_updating_plot = True
+                self.plot_widget.setXRange(0, max_x, padding=0)
+                self.plot_widget.setYRange(0, self.current_y_max, padding=0)
+                self._is_updating_plot = False
 
     def toggle_spectrum(self):
         self.is_spectrum_mode = self.spectrum_switch.isChecked()
@@ -656,20 +668,28 @@ class SonarViewer(QMainWindow):
                 active_voltages = voltages[active_start:]
                 valid_samples = active_voltages[np.isfinite(active_voltages)]
                 if len(valid_samples) > 0:
-                    peak = np.max(valid_samples)
-                    if np.isfinite(peak):
-                        if pulse.get('stream_idx', 0) == 4:
-                            max_cap = PLOT_Y_MAX_RX12_COMPRESSED
-                        elif pulse['receiver_id'] in (0, 3):
-                            max_cap = PLOT_DEFAULT_Y_MAX_RX0
+                    stream_mode_idx = pulse.get('stream_idx', 0)
+                    if stream_mode_idx == 1:
+                        peak = max(float(np.max(valid_samples)), float(abs(np.min(valid_samples))))
+                        max_cap = 3.3
+                    elif stream_mode_idx == 4:
+                        peak = float(np.max(valid_samples))
+                        max_cap = PLOT_Y_MAX_RX12_COMPRESSED
+                    elif pulse['receiver_id'] in (0, 3) and stream_mode_idx == 0:
+                        peak = float(np.max(valid_samples))
+                        max_cap = PLOT_DEFAULT_Y_MAX_RX0
+                    else:
+                        peak = float(np.max(valid_samples))
+                        max_cap = PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                    target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                    if target_y_max > self.current_y_max:
+                        self.current_y_max = target_y_max
+                        self._is_updating_plot = True
+                        if stream_mode_idx == 1:
+                            self.plot_widget.setYRange(-self.current_y_max, self.current_y_max, padding=0)
                         else:
-                            max_cap = PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-                        target_y_max = min(max(peak * 1.15, 0.01), max_cap)
-                        if target_y_max > self.current_y_max:
-                            self.current_y_max = target_y_max
-                            self._is_updating_plot = True
                             self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-                            self._is_updating_plot = False
+                        self._is_updating_plot = False
         
         # Update radar widget
         receiver_id = pulse['receiver_id']
@@ -830,22 +850,27 @@ class SonarViewer(QMainWindow):
                     active_voltages = display_voltages[active_start:]
                     valid_samples = active_voltages[np.isfinite(active_voltages)]
                     if len(valid_samples) > 0:
-                        peak = np.max(valid_samples)
-                        if np.isfinite(peak):
-                            if stream_idx == 4:
-                                max_cap = PLOT_Y_MAX_RX12_COMPRESSED
-                            elif receiver_id in (0, 3):
-                                max_cap = PLOT_DEFAULT_Y_MAX_RX0
+                        if stream_idx == 1:
+                            peak = max(float(np.max(valid_samples)), float(abs(np.min(valid_samples))))
+                            max_cap = 3.3
+                        elif stream_idx == 4:
+                            peak = float(np.max(valid_samples))
+                            max_cap = PLOT_Y_MAX_RX12_COMPRESSED
+                        elif receiver_id in (0, 3) and stream_idx == 0:
+                            peak = float(np.max(valid_samples))
+                            max_cap = PLOT_DEFAULT_Y_MAX_RX0
+                        else:
+                            peak = float(np.max(valid_samples))
+                            max_cap = PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
+                        target_y_max = min(max(peak * 1.15, 0.01), max_cap)
+                        if target_y_max > self.current_y_max:
+                            self.current_y_max = target_y_max
+                            self._is_updating_plot = True
+                            if stream_idx == 1:
+                                self.plot_widget.setYRange(-self.current_y_max, self.current_y_max, padding=0)
                             else:
-                                max_cap = PLOT_DEFAULT_Y_MAX_RX12_RAW_DEMOD
-                            target_y_max = min(max(peak * 1.15, 0.01), max_cap)
-                            if receiver_id in (0, 3):
-                                target_y_max = max(target_y_max, 0.05)
-                            if target_y_max > self.current_y_max:
-                                self.current_y_max = target_y_max
-                                self._is_updating_plot = True
                                 self.plot_widget.setYRange(0, self.current_y_max, padding=0)
-                                self._is_updating_plot = False
+                            self._is_updating_plot = False
             
             if self.is_single_shot:
                 self.get_receiver().send_command("stop")
