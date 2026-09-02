@@ -190,6 +190,8 @@ class SonarViewer(QMainWindow):
         self.control_panel.capture_prev_clicked.connect(self.prev_captured_pulse)
         self.control_panel.capture_next_clicked.connect(self.next_captured_pulse)
 
+        self.previous_signal_idx = self.control_panel.signal_type_combo.currentIndex()
+        self.update_plot_style()
         self.receiver = None
         self.is_streaming = True
         self.is_paused = False
@@ -478,15 +480,23 @@ class SonarViewer(QMainWindow):
                 self.snr_label.setText(self.latest_snr_str)
 
     def change_rx_channel(self, rx_chan):
-        # Map combo index to actual channel ID
+        # Map combo index to actual channel ID: 0 -> Rx Sum (0), 1 -> Rx Diff (3), 2 -> Rx 1 (1), 3 -> Rx 2 (2)
         channel_map = {0: 0, 1: 3, 2: 1, 3: 2}
         actual_rx = channel_map.get(rx_chan, 0)
 
-        # For Rx Sum (0) and Rx Diff (3), allow Compressed or Range-Doppler (for Rx Sum)
         current_stream = self.control_panel.signal_type_combo.currentIndex()
-        if actual_rx in (0, 3):
-            if current_stream not in (4, 5) or (actual_rx == 3 and current_stream == 5):
+        # Rx Sum (0) chỉ hỗ trợ tín hiệu Compressed (4)
+        if actual_rx == 0:
+            if current_stream != 4:
+                self.control_panel.signal_type_combo.blockSignals(True)
                 self.control_panel.signal_type_combo.setCurrentIndex(4) # Compressed
+                self.control_panel.signal_type_combo.blockSignals(False)
+                self.get_receiver().send_command("mode:compressed")
+        elif actual_rx == 3:  # Rx Diff
+            if current_stream not in (4,):
+                self.control_panel.signal_type_combo.blockSignals(True)
+                self.control_panel.signal_type_combo.setCurrentIndex(4) # Compressed
+                self.control_panel.signal_type_combo.blockSignals(False)
                 self.get_receiver().send_command("mode:compressed")
         
         self.update_plot_style()
@@ -547,14 +557,32 @@ class SonarViewer(QMainWindow):
     def change_signal_type(self, idx):
         modes = ["raw", "bpf", "demodulated", "downsampling", "compressed", "range_doppler"]
         mode = modes[idx] if idx < len(modes) else "raw"
+        was_range_doppler = (getattr(self, "previous_signal_idx", -1) == 5)
         
         if idx == 5:  # Range-Doppler
             self.spectrum_switch.setChecked(False)
             self.spectrum_switch.setEnabled(False)
             self.is_spectrum_mode = False
+            # Chế độ Range-Doppler chỉ hỗ trợ trên kênh Rx Sum (0)
+            if self.control_panel.rx_select_combo.currentIndex() != 0:
+                self.control_panel.rx_select_combo.blockSignals(True)
+                self.control_panel.rx_select_combo.setCurrentIndex(0)
+                self.control_panel.rx_select_combo.blockSignals(False)
+                self.get_receiver().send_command("rx_select:0")
         else:
             self.spectrum_switch.setEnabled(True)
+            # 1. Khi chuyển từ Range-Doppler sang bất kỳ loại tín hiệu nào khác (kể cả Compressed),
+            #    phải tự động chuyển về kênh Rx 1 (GPIO 32 - combo index 2).
+            # 2. Rx Sum (combo index 0) và Rx Diff (combo index 1) chỉ hỗ trợ Compressed (idx = 4).
+            #    Nếu đang ở Rx Sum/Diff mà chọn loại khác Compressed -> chuyển về Rx 1.
+            should_switch_to_rx1 = was_range_doppler or (idx != 4 and self.control_panel.rx_select_combo.currentIndex() in (0, 1))
+            if should_switch_to_rx1:
+                self.control_panel.rx_select_combo.blockSignals(True)
+                self.control_panel.rx_select_combo.setCurrentIndex(2)  # Rx 1 (GPIO 32)
+                self.control_panel.rx_select_combo.blockSignals(False)
+                self.get_receiver().send_command("rx_select:1")
             
+        self.previous_signal_idx = idx
         self.update_plot_style()
         self.get_receiver().send_command(f"mode:{mode}")
         self.control_panel.info_label.setText(f"Mode command sent: mode:{mode}")
