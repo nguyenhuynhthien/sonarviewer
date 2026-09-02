@@ -195,9 +195,17 @@ class SonarViewer(QMainWindow):
                 background: none;
             }
         """)
+        telemetry_header_layout = QHBoxLayout()
         self.telemetry_autoscroll = QCheckBox("Auto-scroll")
         self.telemetry_autoscroll.setChecked(True)
-        telemetry_layout.addWidget(self.telemetry_autoscroll)
+        self.clear_telemetry_btn = QPushButton("Clear Log")
+        self.clear_telemetry_btn.clicked.connect(self.clear_telemetry_log)
+        
+        telemetry_header_layout.addWidget(self.telemetry_autoscroll)
+        telemetry_header_layout.addStretch(1)
+        telemetry_header_layout.addWidget(self.clear_telemetry_btn)
+        
+        telemetry_layout.addLayout(telemetry_header_layout)
         telemetry_layout.addWidget(self.telemetry_label, stretch=1)
         self.signal_tabs = QTabWidget()
         self.signal_tabs.addTab(signal_tab, "Signal")
@@ -385,6 +393,10 @@ class SonarViewer(QMainWindow):
             if not is_user_dragging:
                 v_bar.setValue(saved_v)
                 h_bar.setValue(saved_h)
+
+    def clear_telemetry_log(self):
+        self.telemetry_buffer.clear()
+        self.telemetry_label.clear()
 
     def update_bytes_received(self, count):
         self._usb_bytes_received = getattr(self, "_usb_bytes_received", 0) + count
