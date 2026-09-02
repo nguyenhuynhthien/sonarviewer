@@ -142,7 +142,7 @@ class SonarViewer(QMainWindow):
         self.telemetry_label = QPlainTextEdit("No telemetry received")
         self.telemetry_label.setReadOnly(True)
         self.telemetry_label.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.telemetry_label.setMaximumBlockCount(2000)
+        self.telemetry_label.setMaximumBlockCount(100000)
         self.telemetry_label.setStyleSheet("""
             QPlainTextEdit {
                 font-family: Menlo, Monaco, monospace;
@@ -363,23 +363,28 @@ class SonarViewer(QMainWindow):
         if self.telemetry_label.toPlainText() == "No telemetry received" or "No recognized telemetry frame yet" in self.telemetry_label.toPlainText():
             self.telemetry_label.clear()
 
-        # Kiểm tra người dùng có đang giữ chuột kéo thanh cuộn hay không
         v_bar = self.telemetry_label.verticalScrollBar()
         h_bar = self.telemetry_label.horizontalScrollBar()
         is_user_dragging = v_bar.isSliderDown() or h_bar.isSliderDown()
 
-        # Lưu lại giá trị scrollbar nếu không autoscroll hoặc đang kéo chuột
-        saved_v = v_bar.value()
-        saved_h = h_bar.value()
-
-        self.telemetry_label.appendPlainText(combined_text)
-
         if self.telemetry_autoscroll.isChecked() and not is_user_dragging:
+            self.telemetry_label.appendPlainText(combined_text)
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
             self.telemetry_label.ensureCursorVisible()
         else:
-            v_bar.setValue(saved_v)
-            h_bar.setValue(saved_h)
+            # Lưu lại vị trí scroll hiện tại
+            saved_v = v_bar.value()
+            saved_h = h_bar.value()
+            
+            # Chèn text vào cuối document mà không làm di chuyển cursor của view
+            cursor = self.telemetry_label.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText(("\n" if self.telemetry_label.toPlainText() else "") + combined_text)
+            
+            # Khôi phục vị trí thanh cuộn nếu người dùng không kéo trực tiếp
+            if not is_user_dragging:
+                v_bar.setValue(saved_v)
+                h_bar.setValue(saved_h)
 
     def update_bytes_received(self, count):
         self._usb_bytes_received = getattr(self, "_usb_bytes_received", 0) + count
