@@ -143,7 +143,58 @@ class SonarViewer(QMainWindow):
         self.telemetry_label.setReadOnly(True)
         self.telemetry_label.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.telemetry_label.setMaximumBlockCount(2000)
-        self.telemetry_label.setStyleSheet("font-family: Menlo, Monaco, monospace; font-size: 14px; padding: 12px;")
+        self.telemetry_label.setStyleSheet("""
+            QPlainTextEdit {
+                font-family: Menlo, Monaco, monospace;
+                font-size: 14px;
+                padding: 12px;
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #333333;
+            }
+            QScrollBar:horizontal {
+                height: 14px;
+                background: #252526;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #5a5a5a;
+                min-width: 30px;
+                border-radius: 4px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #7a7a7a;
+            }
+            QScrollBar::handle:horizontal:pressed {
+                background: #9a9a9a;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                background: none;
+            }
+            QScrollBar:vertical {
+                width: 14px;
+                background: #252526;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #5a5a5a;
+                min-height: 30px;
+                border-radius: 4px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #7a7a7a;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background: #9a9a9a;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                width: 0px;
+                background: none;
+            }
+        """)
         self.telemetry_autoscroll = QCheckBox("Auto-scroll")
         self.telemetry_autoscroll.setChecked(True)
         telemetry_layout.addWidget(self.telemetry_autoscroll)
@@ -312,11 +363,23 @@ class SonarViewer(QMainWindow):
         if self.telemetry_label.toPlainText() == "No telemetry received" or "No recognized telemetry frame yet" in self.telemetry_label.toPlainText():
             self.telemetry_label.clear()
 
+        # Kiểm tra người dùng có đang giữ chuột kéo thanh cuộn hay không
+        v_bar = self.telemetry_label.verticalScrollBar()
+        h_bar = self.telemetry_label.horizontalScrollBar()
+        is_user_dragging = v_bar.isSliderDown() or h_bar.isSliderDown()
+
+        # Lưu lại giá trị scrollbar nếu không autoscroll hoặc đang kéo chuột
+        saved_v = v_bar.value()
+        saved_h = h_bar.value()
+
         self.telemetry_label.appendPlainText(combined_text)
 
-        if self.telemetry_autoscroll.isChecked():
+        if self.telemetry_autoscroll.isChecked() and not is_user_dragging:
             self.telemetry_label.moveCursor(QTextCursor.MoveOperation.End)
             self.telemetry_label.ensureCursorVisible()
+        else:
+            v_bar.setValue(saved_v)
+            h_bar.setValue(saved_h)
 
     def update_bytes_received(self, count):
         self._usb_bytes_received = getattr(self, "_usb_bytes_received", 0) + count
